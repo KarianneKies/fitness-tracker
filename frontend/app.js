@@ -406,27 +406,56 @@ function renderExercises() {
                 ${!exercise.id ? '<span style="font-size: 0.8rem; color: #888;">(unsaved)</span>' : ''}
             </div>
             
-            <div class="sets-container" id="sets-${exercise.id || 'temp-' + exIndex}">
-                ${exercise.sets && exercise.sets.length > 0 ? exercise.sets.map((set, setIndex) => `
-                    <div class="set-item" data-set-id="${set.id || 'temp-set-' + setIndex}">
-                        <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <span style="font-size: 0.85rem; color: #666;">Set ${setIndex + 1}:</span>
-                            ${set.reps !== null ? `<span>${set.reps} reps</span>` : ''}
-                            ${set.weight_kg !== null ? `<span>${set.weight_kg}kg</span>` : ''}
-                            ${set.to_failure ? '<span style="font-size: 0.75rem; color: #e94560;">(to failure)</span>' : ''}
-                            ${set.rest_seconds !== null ? `<span style="font-size: 0.8rem; color: #666;">Rest: ${set.rest_seconds}s</span>` : ''}
-                        </div>
-                        ${set.note ? `<small style="color: #666;">${set.note}</small>` : ''}
-                    </div>
-                `).join('') : '<p style="font-size: 0.85rem; color: #999; margin-top: 0.5rem;">No sets added yet</p>'}
-                
-                <div style="margin-top: 0.75rem;">
-                    <button class="btn btn-secondary" style="font-size: 0.85rem; padding: 0.5rem;" onclick="showAddSetForm(${exIndex})">
-                        + Add Set
-                    </button>
-                </div>
+            <table class="set-table" style="width: 100%; border-collapse: collapse; margin-top: 0.75rem; font-size: 0.85rem;">
+                <thead>
+                    <tr style="border-bottom: 1px solid #eee;">
+                        <th style="text-align: left; padding: 0.5rem; width: 15%;">Set</th>
+                        <th style="text-align: left; padding: 0.5rem; width: 15%;">Previous</th>
+                        <th style="text-align: left; padding: 0.5rem; width: 25%;">kg</th>
+                        <th style="text-align: left; padding: 0.5rem; width: 25%;">Reps</th>
+                        <th style="text-align: center; padding: 0.5rem; width: 20%;">✓</th>
+                    </tr>
+                </thead>
+                <tbody id="sets-${exercise.id || 'temp-' + exIndex}">
+                    ${renderSetRows(exercise, exIndex)}
+                </tbody>
+            </table>
+            
+            <div style="margin-top: 0.5rem;">
+                <button class="btn btn-secondary" style="font-size: 0.85rem; padding: 0.5rem;" onclick="showAddSetForm(${exIndex})">
+                    + Add Set
+                </button>
             </div>
         </div>
+    `).join('');
+}
+
+// Render set rows for a given exercise
+function renderSetRows(exercise, exIndex) {
+    const sets = exercise.sets || [];
+    
+    if (sets.length === 0) {
+        return '<tr><td colspan="5" style="text-align: center; color: #999; padding: 0.5rem;">No sets added yet</td></tr>';
+    }
+    
+    return sets.map((set, setIndex) => `
+        <tr data-set-id="${set.id || 'temp-set-' + setIndex}">
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
+                <span style="color: #666;">Set ${setIndex + 1}</span>
+            </td>
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
+                <span style="color: #999;">—</span>
+            </td>
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
+                <input type="number" class="set-weight" data-set-index="${setIndex}" value="${set.weight_kg !== null ? set.weight_kg : ''}" placeholder="kg" min="0" step="0.5" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;">
+            </td>
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
+                <input type="number" class="set-reps" data-set-index="${setIndex}" value="${set.reps !== null ? set.reps : ''}" placeholder="reps" min="1" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;">
+            </td>
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
+                <button class="btn-check-set" style="background: #4caf50; color: white; border: none; width: 28px; height: 28px; border-radius: 4px; cursor: pointer; font-size: 1rem;" onclick="saveSet(${exIndex}, ${setIndex})">✓</button>
+            </td>
+        </tr>
     `).join('');
 }
 
@@ -532,6 +561,61 @@ window.saveNewSet = async function(exerciseIndex, tempSetOrder) {
         // Update local state with saved data
         exercisesData[exerciseIndex].sets = updatedWorkout.exercises[exerciseIndex].sets;
         renderExercises();
+        
+    } catch (error) {
+        console.error('Error saving set:', error);
+        alert('Failed to save set');
+    }
+};
+
+// Save set (update individual weight/reps)
+window.saveSet = async function(exerciseIndex, setIndex) {
+    const exercise = exercisesData[exerciseIndex];
+    if (!exercise || !exercise.id) return;
+    
+    // Get current values from the inputs
+    const setRow = document.querySelector(`[data-exercise-id="${exercise.id || 'temp-' + exerciseIndex}"] tbody tr[data-set-id]`);
+    const weightInput = setRow.querySelector('.set-weight');
+    const repsInput = setRow.querySelector('.set-reps');
+    
+    const weight_kg = weightInput.value ? parseFloat(weightInput.value) : null;
+    const reps = repsInput.value ? parseInt(repsInput.value) : null;
+    
+    // Get current workout details from backend
+    try {
+        const workoutDetail = await api.get(`/workouts/${activeWorkout.id}`);
+        
+        // Build the update payload
+        const exercisesUpdate = workoutDetail.exercises.map((ex, idx) => ({
+            id: ex.id,
+            name: ex.name,
+            order: ex.order,
+            sets: (ex.sets || []).map((s, sIdx) => {
+                if (idx === exerciseIndex && sIdx === setIndex) {
+                    return {
+                        id: s.id,
+                        order: s.order,
+                        weight_kg: weight_kg !== null ? weight_kg : s.weight_kg,
+                        reps: reps !== null ? reps : s.reps
+                    };
+                }
+                return { id: s.id, order: s.order, weight_kg: s.weight_kg, reps: s.reps };
+            })
+        }));
+        
+        // Update workout with new set values
+        await api.patch(`/workouts/${activeWorkout.id}`, {
+            exercises: exercisesUpdate,
+            notes: workoutDetail.notes
+        });
+        
+        // Update local state with saved data
+        exercisesData[exerciseIndex].sets = workoutDetail.exercises[exerciseIndex].sets.map((s, sIdx) => {
+            if (sIdx === setIndex) {
+                return { ...s, weight_kg: weight_kg !== null ? weight_kg : s.weight_kg, reps: reps !== null ? reps : s.reps };
+            }
+            return s;
+        });
         
     } catch (error) {
         console.error('Error saving set:', error);
