@@ -422,7 +422,7 @@ function renderExercises() {
             </table>
             
             <div style="margin-top: 0.5rem;">
-                <button class="btn btn-secondary" style="font-size: 0.85rem; padding: 0.5rem;" onclick="showAddSetForm(${exIndex})">
+                <button class="btn btn-secondary add-set-btn" style="font-size: 0.85rem; padding: 0.5rem;" data-exercise-index="${exIndex}">
                     + Add Set
                 </button>
             </div>
@@ -461,8 +461,13 @@ function renderSetRows(exercise, exIndex) {
 
 // Show add set form
 window.showAddSetForm = function(exerciseIndex) {
+    console.log('showAddSetForm called with index:', exerciseIndex);
     const exercise = exercisesData[exerciseIndex];
-    if (!exercise) return;
+    if (!exercise) {
+        console.error('Exercise not found at index:', exerciseIndex);
+        return;
+    }
+    console.log('Found exercise:', exercise.name, 'ID:', exercise.id);
     
     // Check if this exercise exists in backend (has ID)
     const setIndex = (exercise.sets ? exercise.sets.length : 0) + 1;
@@ -487,8 +492,18 @@ window.showAddSetForm = function(exerciseIndex) {
         </tr>
     `;
     
-    const tbody = document.getElementById(`sets-${exercise.id || 'temp-' + exerciseIndex}`);
-    if (!tbody) return;
+    // Find the tbody for this exercise by traversing from the button's context
+    const exerciseRow = document.querySelector(`[data-exercise-id="${exercise.id || 'temp-' + exerciseIndex}"]`);
+    if (!exerciseRow) {
+        console.error('Could not find exercise row for index:', exerciseIndex);
+        return;
+    }
+    
+    const tbody = exerciseRow.querySelector('tbody');
+    if (!tbody) {
+        console.error('Could not find tbody in exercise row:', exercise.id || 'temp-' + exerciseIndex);
+        return;
+    }
     
     tbody.insertAdjacentHTML('beforeend', setHtml);
 };
@@ -498,12 +513,24 @@ window.saveNewSet = async function(exerciseIndex, tempSetOrder) {
     const exercise = exercisesData[exerciseIndex];
     if (!exercise) return;
     
-    // Find the temp row that was just added
-    const tbody = document.getElementById(`sets-${exercise.id || 'temp-' + exerciseIndex}`);
-    if (!tbody) return;
+    // Find the temp row by traversing from exercise row
+    const exerciseRow = document.querySelector(`[data-exercise-id="${exercise.id || 'temp-' + exerciseIndex}"]`);
+    if (!exerciseRow) {
+        console.error('Could not find exercise row for temp set saving');
+        return;
+    }
+    
+    const tbody = exerciseRow.querySelector('tbody');
+    if (!tbody) {
+        console.error('Could not find tbody for temp set saving');
+        return;
+    }
     
     const tempRow = tbody.querySelector('[data-set-id*="temp-new-"]');
-    if (!tempRow) return;
+    if (!tempRow) {
+        console.error('Could not find temp row in tbody');
+        return;
+    }
     
     // Get values from inputs in this row
     const weightInput = tempRow.querySelector('.set-weight');
@@ -729,6 +756,15 @@ document.addEventListener('DOMContentLoaded', () => {
             showExercisePicker();
         });
     }
+    
+    // Event delegation for "Add Set" buttons
+    document.addEventListener('click', (e) => {
+        if (e.target.matches('.add-set-btn')) {
+            const exerciseIndex = parseInt(e.target.dataset.exerciseIndex);
+            console.log('Add set button clicked, exercise index:', exerciseIndex);
+            showAddSetForm(exerciseIndex);
+        }
+    });
     
     // Load workouts when clicking Workout tab
     window.loadWorkouts = async () => {
