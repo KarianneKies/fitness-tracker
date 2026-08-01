@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Fitness Tracker</title>
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#1a1a2e">
+    <meta name="description" content="Local-first fitness and nutrition tracker">
+    
+    <!-- PWA Styles -->
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        .app-container {
+            max-width: 600px;
+            margin: 0 auto;
+            min-height: 100vh;
+            background: #fff;
+        }
+        
+        header {
+            background: #1a1a2e;
+            color: white;
+            padding: 1rem;
+            text-align: center;
+        }
+        
+        header h1 {
+            font-size: 1.5rem;
+        }
+        
+        .content-area {
+            padding: 1rem;
+        }
+        
+        /* Tabs */
+        .tabs {
+            display: flex;
+            background: #1a1a2e;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .tab {
+            flex: 1;
+            padding: 1rem;
+            text-align: center;
+            cursor: pointer;
+            color: #aaa;
+            transition: color 0.2s, border-bottom 0.2s;
+        }
+        
+        .tab.active {
+            color: white;
+            border-bottom: 3px solid #e94560;
+        }
+        
+        .tab:hover {
+            color: #ddd;
+        }
+        
+        /* Tab Content */
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.3s;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        /* Cards */
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .card h2 {
+            font-size: 1.2rem;
+            margin-bottom: 0.5rem;
+            color: #1a1a2e;
+        }
+        
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .metric:last-child {
+            border-bottom: none;
+        }
+        
+        /* Buttons */
+        .btn {
+            background: #e94560;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            width: 100%;
+        }
+        
+        .btn:hover {
+            background: #d63850;
+        }
+        
+        .btn-secondary {
+            background: #1a1a2e;
+        }
+        
+        .btn-secondary:hover {
+            background: #0f0f1e;
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        
+        /* Timer Display */
+        .timer-display {
+            font-size: 2.5rem;
+            text-align: center;
+            font-weight: bold;
+            color: #e94560;
+            margin: 1rem 0;
+        }
+        
+        /* Exercise Form */
+        .exercise-form {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-top: 1rem;
+        }
+        
+        .exercise-form h4 {
+            margin-bottom: 0.75rem;
+        }
+        
+        .exercise-form input,
+        .exercise-form textarea {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 1rem;
+        }
+        
+        .exercise-form textarea {
+            resize: vertical;
+            min-height: 60px;
+        }
+        
+        /* Sets Container */
+        .sets-container {
+            margin-top: 1rem;
+        }
+        
+        .set-item {
+            background: #f0f4f8;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+        }
+        
+        .set-form {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        
+        .set-form input {
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+        
+        .set-form input[type="number"] {
+            flex: 1;
+            min-width: 80px;
+        }
+        
+        .set-form label {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-size: 0.85rem;
+        }
+        
+        /* Workout List */
+        .workout-list {
+            margin-top: 1rem;
+        }
+        
+        .workout-item {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+            cursor: pointer;
+        }
+        
+        .workout-item:hover {
+            background: #e9ecef;
+        }
+        
+        .workout-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .workout-date {
+            font-weight: bold;
+            color: #1a1a2e;
+        }
+        
+        .workout-duration {
+            font-size: 0.85rem;
+            color: #666;
+        }
+        
+        .workout-notes {
+            margin-top: 0.25rem;
+            font-size: 0.85rem;
+            color: #666;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        /* Active Workout Header */
+        .active-workout-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        
+        .workout-id {
+            font-size: 0.85rem;
+            color: #999;
+        }
+        
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 2rem;
+            color: #888;
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <header>
+            <h1>Fitness Tracker</h1>
+        </header>
+        
+        <nav class="tabs">
+            <div class="tab active" data-tab="today">Today</div>
+            <div class="tab" data-tab="food">Food</div>
+            <div class="tab" data-tab="workout">Workout</div>
+            <div class="tab" data-tab="checkin">Check-in</div>
+            <div class="tab" data-tab="goal">Goal</div>
+        </nav>
+        
+        <main class="content-area">
+            <!-- Today Tab -->
+            <div id="today" class="tab-content active">
+                <h2 style="margin-bottom: 1rem;">Today's Overview</h2>
+                <div class="card">
+                    <h3>Calories</h3>
+                    <div class="metric">
+                        <span>Consumed:</span>
+                        <span id="calories-consumed">0</span>
+                    </div>
+                    <div class="metric">
+                        <span>Goal:</span>
+                        <span id="calories-goal">2000</span>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h3>Macros</h3>
+                    <div class="metric">
+                        <span>Protein:</span>
+                        <span id="protein">0g / 150g</span>
+                    </div>
+                    <div class="metric">
+                        <span>Carbs:</span>
+                        <span id="carbs">0g / 250g</span>
+                    </div>
+                    <div class="metric">
+                        <span>Fat:</span>
+                        <span id="fat">0g / 65g</span>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h3>Exercise</h3>
+                    <div class="metric">
+                        <span>Duration:</span>
+                        <span id="exercise-duration">0 min</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Food Tab -->
+            <div id="food" class="tab-content">
+                <h2 style="margin-bottom: 1rem;">Food Log</h2>
+                <div class="card">
+                    <button id="scan-button" class="btn">📷 Scan Barcode</button>
+                    <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #666;">
+                        Use camera to scan food barcodes for automatic nutrition lookup
+                    </p>
+                </div>
+                
+                <div class="card">
+                    <h3>Today's Meals</h3>
+                    <div id="food-list" class="empty-state">
+                        No foods logged yet. Scan a barcode or add manually.
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Workout Tab -->
+            <div id="workout" class="tab-content">
+                <h2 style="margin-bottom: 1rem;">Workout Log</h2>
+                
+                <!-- Active Workout Section -->
+                <div id="active-workout-section" style="display: none;">
+                    <div class="card">
+                        <div class="active-workout-header">
+                            <div>
+                                <h3>Active Workout</h3>
+                                <span class="workout-id" id="active-workout-id"></span>
+                            </div>
+                            <button id="finish-workout" class="btn">Finish</button>
+                        </div>
+                        
+                        <div class="timer-display" id="workout-timer">00:00</div>
+                        
+                        <button id="start-new-exercise" class="btn btn-secondary">+ Add Exercise</button>
+                        
+                        <div id="workout-exercises" style="margin-top: 1rem;">
+                            <!-- Exercises will be rendered here -->
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Start New Workout Section -->
+                <div id="start-workout-section" class="card">
+                    <button id="start-new-workout" class="btn">▶ Start Workout</button>
+                </div>
+                
+                <!-- Past Workouts Section -->
+                <div class="card">
+                    <h3 style="margin-bottom: 0.75rem;">Past Workouts</h3>
+                    <div id="workout-list" class="empty-state">
+                        No workouts logged yet.
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Check-in Tab -->
+            <div id="checkin" class="tab-content">
+                <h2 style="margin-bottom: 1rem;">Weekly Check-in</h2>
+                
+                <div class="card">
+                    <h3>This Week's Stats</h3>
+                    <div id="checkin-stats" class="empty-state">
+                        Data will appear as you track your progress
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h3>Reflection</h3>
+                    <p style="font-size: 0.9rem; color: #666;">
+                        How did your week go? What worked well? What could be improved?
+                    </p>
+                </div>
+                
+                <button id="save-checkin" class="btn">Save Check-in</button>
+            </div>
+            
+            <!-- Goal Tab -->
+            <div id="goal" class="tab-content">
+                <h2 style="margin-bottom: 1rem;">Goals</h2>
+                
+                <div class="card">
+                    <h3>Your Goals</h3>
+                    <div id="goal-list" class="empty-state">
+                        Set goals to track your progress
+                    </div>
+                </div>
+                
+                <button id="add-goal" class="btn">+ Add New Goal</button>
+            </div>
+        </main>
+    </div>
+    
+    <script type="module" src="app.js"></script>
+</body>
+</html>
