@@ -468,35 +468,29 @@ window.showAddSetForm = function(exerciseIndex) {
     const setIndex = (exercise.sets ? exercise.sets.length : 0) + 1;
     
     const setHtml = `
-        <div class="set-item" data-set-id="temp-new-${Date.now()}">
-            <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem;">
-                <span style="font-size: 0.85rem; color: #666;">Set ${setIndex}:</span>
-                <input type="number" id="new-set-reps" placeholder="Reps" min="1" style="flex: 1; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;">
-                <input type="number" id="new-set-weight" placeholder="kg" min="0" step="0.5" style="flex: 1; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;">
-            </div>
-            <div style="display: flex; gap: 1rem; align-items: center;">
-                <label style="font-size: 0.85rem;">
-                    <input type="checkbox" id="new-set-to-failure"> To failure
-                </label>
-                <input type="number" id="new-set-rest" placeholder="Rest (s)" min="0" style="flex: 1; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;">
-                <textarea id="new-set-note" placeholder="Note (optional)" style="flex: 2; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.85rem;"></textarea>
-            </div>
-            <div style="margin-top: 0.5rem; display: flex; gap: 0.5rem;">
-                <button class="btn btn-secondary" style="flex: 1; padding: 0.4rem;" onclick="saveNewSet(${exerciseIndex}, ${setIndex - 1})">Save Set</button>
-                <button class="btn btn-danger" style="flex: 1; padding: 0.4rem;" onclick="cancelNewSet(this)">Cancel</button>
-            </div>
-        </div>
+        <tr data-set-id="temp-new-${Date.now()}">
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
+                <span style="color: #666;">Set ${setIndex}</span>
+            </td>
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
+                <span style="color: #999;">—</span>
+            </td>
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
+                <input type="number" class="set-weight" placeholder="kg" min="0" step="0.5" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;">
+            </td>
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
+                <input type="number" class="set-reps" placeholder="reps" min="1" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;">
+            </td>
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
+                <button class="btn-check-set" style="background: #4caf50; color: white; border: none; width: 28px; height: 28px; border-radius: 4px; cursor: pointer; font-size: 1rem;" onclick="saveNewSet(${exerciseIndex}, ${setIndex - 1})">✓</button>
+            </td>
+        </tr>
     `;
     
-    const container = document.getElementById(`sets-${exercise.id || 'temp-' + exerciseIndex}`);
-    if (!container) return;
+    const tbody = document.getElementById(`sets-${exercise.id || 'temp-' + exerciseIndex}`);
+    if (!tbody) return;
     
-    const addSetBtn = container.querySelector('button');
-    if (addSetBtn) {
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = setHtml;
-        container.insertBefore(tempDiv.firstChild, addSetBtn);
-    }
+    tbody.insertAdjacentHTML('beforeend', setHtml);
 };
 
 // Save new set
@@ -504,29 +498,30 @@ window.saveNewSet = async function(exerciseIndex, tempSetOrder) {
     const exercise = exercisesData[exerciseIndex];
     if (!exercise) return;
     
-    // Get values from form
-    const repsInput = document.getElementById('new-set-reps');
-    const weightInput = document.getElementById('new-set-weight');
-    const toFailureCheckbox = document.getElementById('new-set-to-failure');
-    const restInput = document.getElementById('new-set-rest');
-    const noteInput = document.getElementById('new-set-note');
+    // Find the temp row that was just added
+    const tbody = document.getElementById(`sets-${exercise.id || 'temp-' + exerciseIndex}`);
+    if (!tbody) return;
     
-    if (!repsInput || !weightInput) return;
+    const tempRow = tbody.querySelector('[data-set-id*="temp-new-"]');
+    if (!tempRow) return;
+    
+    // Get values from inputs in this row
+    const weightInput = tempRow.querySelector('.set-weight');
+    const repsInput = tempRow.querySelector('.set-reps');
+    
+    if (!weightInput || !repsInput) return;
     
     const set = {
         order: tempSetOrder + 1,
         reps: parseInt(repsInput.value) || null,
         weight_kg: parseFloat(weightInput.value) || null,
-        to_failure: toFailureCheckbox ? toFailureCheckbox.checked : false,
-        rest_seconds: parseInt(restInput.value) || null,
-        note: noteInput ? noteInput.value : ''
+        to_failure: false,
+        rest_seconds: null,
+        note: ''
     };
     
-    // Remove the temporary set form
-    const tempItem = document.querySelector('[data-set-id*="temp-new-"]');
-    if (tempItem) {
-        tempItem.remove();
-    }
+    // Remove the temporary row
+    tempRow.remove();
     
     // For new exercise, add to local state immediately
     if (!exercise.id) {
@@ -541,16 +536,18 @@ window.saveNewSet = async function(exerciseIndex, tempSetOrder) {
         // Get current workout details from backend
         const workoutDetail = await api.get(`/workouts/${activeWorkout.id}`);
         
-        // Build the update payload
-        const exercisesUpdate = workoutDetail.exercises.map((ex, idx) => ({
-            id: ex.id,
-            name: ex.name,
-            order: ex.order
-        }));
-        
-        // Add the new set to the last exercise (current one)
-        if (!exercisesUpdate[exerciseIndex].sets) exercisesUpdate[exerciseIndex].sets = [];
-        exercisesUpdate[exerciseIndex].sets.push(set);
+        // Build the update payload - find which exercise we're updating
+        const exercisesUpdate = workoutDetail.exercises.map((ex, idx) => {
+            if (idx === exerciseIndex) {
+                return {
+                    id: ex.id,
+                    name: ex.name,
+                    order: ex.order,
+                    sets: (ex.sets || []).concat([set])
+                };
+            }
+            return { id: ex.id, name: ex.name, order: ex.order, sets: ex.sets || [] };
+        });
         
         // Update workout with new set
         const updatedWorkout = await api.patch(`/workouts/${activeWorkout.id}`, {
@@ -560,7 +557,6 @@ window.saveNewSet = async function(exerciseIndex, tempSetOrder) {
         
         // Update local state with saved data
         exercisesData[exerciseIndex].sets = updatedWorkout.exercises[exerciseIndex].sets;
-        renderExercises();
         
     } catch (error) {
         console.error('Error saving set:', error);
@@ -625,7 +621,7 @@ window.saveSet = async function(exerciseIndex, setIndex) {
 
 // Cancel new set
 window.cancelNewSet = function(btn) {
-    btn.closest('.set-item').remove();
+    btn.closest('tr').remove();
 };
 
 // Initialize workout on DOM ready
