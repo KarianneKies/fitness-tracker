@@ -422,7 +422,7 @@ function renderExercises() {
             </table>
             
             <div style="margin-top: 0.5rem;">
-                <button class="btn btn-secondary add-set-btn" style="font-size: 0.85rem; padding: 0.5rem;" data-exercise-index="${exIndex}">
+                <button class="btn btn-secondary" style="font-size: 0.85rem; padding: 0.5rem; background: #1a1a2e !important;" data-exercise-index="${exIndex}">
                     + Add Set
                 </button>
             </div>
@@ -452,8 +452,10 @@ function renderSetRows(exercise, exIndex) {
             <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
                 <input type="number" class="set-reps" data-set-index="${setIndex}" value="${set.reps !== null ? set.reps : ''}" placeholder="reps" min="1" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;">
             </td>
-            <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
-                <button class="btn-check-set" style="background: #4caf50; color: white; border: none; width: 28px; height: 28px; border-radius: 4px; cursor: pointer; font-size: 1rem;" onclick="saveSet(${exIndex}, ${setIndex})">✓</button>
+             <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
+                <label style="cursor: pointer; display: flex; align-items: center; justify-content: center; width: 100%;">
+                    <input type="checkbox" class="set-checkbox" style="width: 18px; height: 18px; cursor: pointer;" onchange="toggleSetCompleted(${exIndex}, ${setIndex}, this)" ${set.completed ? 'checked' : ''}>
+                </label>
             </td>
         </tr>
     `).join('');
@@ -466,7 +468,7 @@ window.showAddSetForm = function(exerciseIndex) {
     if (!exercise) {
         console.error('Exercise not found at index:', exerciseIndex);
         return;
-    }
+cker     }
     console.log('Found exercise:', exercise.name, 'ID:', exercise.id);
     
     // Check if this exercise exists in backend (has ID)
@@ -486,8 +488,10 @@ window.showAddSetForm = function(exerciseIndex) {
             <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
                 <input type="number" class="set-reps" placeholder="reps" min="1" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;">
             </td>
-            <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
-                <button class="btn-check-set" style="background: #4caf50; color: white; border: none; width: 28px; height: 28px; border-radius: 4px; cursor: pointer; font-size: 1rem;" onclick="saveNewSet(${exerciseIndex}, ${setIndex - 1})">✓</button>
+             <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
+                <label style="cursor: pointer; display: flex; align-items: center; justify-content: center; width: 100%;">
+                    <input type="checkbox" class="set-checkbox" style="width: 18px; height: 18px; cursor: pointer;" onchange="saveNewSetFromCheckbox(${exerciseIndex}, ${setIndex - 1}, this)">
+                </label>
             </td>
         </tr>
     `;
@@ -506,6 +510,56 @@ window.showAddSetForm = function(exerciseIndex) {
     }
     
     tbody.insertAdjacentHTML('beforeend', setHtml);
+};
+
+// Save new set from checkbox
+window.saveNewSetFromCheckbox = async function(exerciseIndex, tempSetOrder, checkbox) {
+    if (checkbox.checked) {
+        // Checkbox was just checked - save the set values
+        await window.saveNewSet(exerciseIndex, tempSetOrder);
+    } else {
+        // Checkbox unchecked - remove the set without saving
+        const exercise = exercisesData[exerciseIndex];
+        
+        if (!exercise || !exercise.id) {
+            // For temp exercise, just remove from DOM
+            const row = checkbox.closest('tr');
+            if (row) row.remove();
+            
+            // Update local data
+            if (exercise && exercise.sets && exercise.sets[tempSetOrder]) {
+                exercise.sets.splice(tempSetOrder, 1);
+            }
+        } else {
+            // For saved exercise (shouldn't happen in this context), remove from backend
+            try {
+                const workoutDetail = await api.get(`/workouts/${activeWorkout.id}`);
+                
+                // Build update payload without the removed set
+                const exercisesUpdate = workoutDetail.exercises.map((ex, idx) => ({
+                    id: ex.id,
+                    name: ex.name,
+                    order: ex.order,
+                    sets: (ex.sets || []).filter((s, sIdx) => !(idx === exerciseIndex && sIdx === tempSetOrder))
+                }));
+                
+                await api.patch(`/workouts/${activeWorkout.id}`, {
+                    exercises: exercisesUpdate,
+                    notes: workoutDetail.notes
+                });
+                
+                // Update local state - remove the set
+                if (exercise.sets) {
+                    exercise.sets.splice(tempSetOrder, 1);
+                    renderExercises();
+                }
+            } catch (error) {
+                console.error('Error removing set:', error);
+                alert('Failed to remove set');
+                checkbox.checked = true; // Re-check if failed
+            }
+        }
+    }
 };
 
 // Save new set
@@ -591,15 +645,99 @@ window.saveNewSet = async function(exerciseIndex, tempSetOrder) {
     }
 };
 
+// Toggle set checkbox - if unchecked, remove the set
+window.toggleSetCompleted = async function(exerciseIndex, setIndex, checkbox) {
+    // Get the row element using the checkbox's context
+    const row = checkbox.closest('tr');
+    
+    if (!checkbox.checked) {
+        // Checkbox unchecked - remove the set
+        const exercise = exercisesData[exerciseIndex];
+        
+        if (!exercise || !exercise.id) {
+            // For temp exercise, just remove from DOM
+            if (row) row.remove();
+            
+            // Update local data - find and remove this set from the exercise
+            if (exercise && exercise.sets) {
+                exercise.sets.splice(setIndex, 1);
+            }
+            return;
+        }
+        
+        // For saved exercise, remove from backend
+        try {
+            const workoutDetail = await api.get(`/workouts/${activeWorkout.id}`);
+            
+            // Build update payload without the removed set
+            const exercisesUpdate = workoutDetail.exercises.map((ex, idx) => ({
+                id: ex.id,
+                name: ex.name,
+                order: ex.order,
+                sets: (ex.sets || []).filter((s, sIdx) => !(idx === exerciseIndex && sIdx === setIndex))
+            }));
+            
+            await api.patch(`/workouts/${activeWorkout.id}`, {
+                exercises: exercisesUpdate,
+                notes: workoutDetail.notes
+            });
+            
+            // Update local state - remove the set from the exercise
+            if (exercise.sets) {
+                exercise.sets.splice(setIndex, 1);
+            }
+            
+            // Remove the row from DOM immediately
+            if (row) row.remove();
+        } catch (error) {
+            console.error('Error removing set:', error);
+            alert('Failed to remove set');
+            checkbox.checked = true; // Re-check if failed
+        }
+    } else {
+        // Checkbox checked - save the set values
+        window.saveSet(exerciseIndex, setIndex);
+    }
+};
+
 // Save set (update individual weight/reps)
 window.saveSet = async function(exerciseIndex, setIndex) {
     const exercise = exercisesData[exerciseIndex];
     if (!exercise || !exercise.id) return;
     
-    // Get current values from the inputs
-    const setRow = document.querySelector(`[data-exercise-id="${exercise.id || 'temp-' + exerciseIndex}"] tbody tr[data-set-id]`);
-    const weightInput = setRow.querySelector('.set-weight');
-    const repsInput = setRow.querySelector('.set-reps');
+    // Find the row using querySelector on tbody by finding the setIndex-th row
+    const exerciseRow = document.querySelector(`[data-exercise-id="${exercise.id || 'temp-' + exerciseIndex}"]`);
+    if (!exerciseRow) {
+        console.error('Could not find exercise row for set saving');
+        return;
+    }
+    
+    const tbody = exerciseRow.querySelector('tbody');
+    if (!tbody) {
+        console.error('Could not find tbody in exercise row');
+        return;
+    }
+    
+    // Get all rows and select the one at setIndex
+    const allRows = tbody.querySelectorAll('tr');
+    if (setIndex >= allRows.length) {
+        console.error('setIndex', setIndex, 'out of range for', allRows.length, 'rows');
+        return;
+    }
+    
+    const row = allRows[setIndex];
+    if (!row) {
+        console.error('Could not find row at setIndex:', setIndex);
+        return;
+    }
+    
+    const weightInput = row.querySelector('.set-weight');
+    const repsInput = row.querySelector('.set-reps');
+    
+    if (!weightInput || !repsInput) {
+        console.error('Could not find input fields in row');
+        return;
+    }
     
     const weight_kg = weightInput.value ? parseFloat(weightInput.value) : null;
     const reps = repsInput.value ? parseInt(repsInput.value) : null;
