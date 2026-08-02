@@ -67,9 +67,11 @@ class WorkoutUpdate(BaseModel):
 
 class ExerciseSetData(BaseModel):
     """Request model for an exercise set."""
+    id: Optional[int] = None
     order: int
     reps: Optional[int] = None
     weight_kg: Optional[float] = None
+    hold_seconds: Optional[int] = None
     to_failure: bool = False
     rest_seconds: Optional[int] = None
     note: Optional[str] = None
@@ -77,6 +79,7 @@ class ExerciseSetData(BaseModel):
 
 class ExerciseCreate(BaseModel):
     """Request model for adding an exercise to a workout."""
+    id: Optional[int] = None
     name: str
     order: int
     sets: Optional[List[ExerciseSetData]] = None
@@ -98,6 +101,7 @@ class ExerciseSetResponse(BaseModel):
     order: int
     reps: Optional[int]
     weight_kg: Optional[float]
+    hold_seconds: Optional[int]
     to_failure: bool
     rest_seconds: Optional[int]
     note: Optional[str]
@@ -234,6 +238,7 @@ async def get_workout(workout_id: int):
                         order=s.order,
                         reps=s.reps,
                         weight_kg=s.weight_kg,
+                        hold_seconds=s.hold_seconds,
                         to_failure=s.to_failure,
                         rest_seconds=s.rest_seconds,
                         note=s.note
@@ -287,16 +292,24 @@ async def update_workout(workout_id: int, workout_update: WorkoutUpdate):
         
         session.commit()
         
-        # Handle adding exercises if provided
+        # Handle adding/updating exercises if provided
         if workout_update.exercises is not None:
             for exercise_data in workout_update.exercises:
-                # Check if exercise already exists (by checking name and order)
-                existing_exercise = session.query(Exercise).filter(
-                    Exercise.workout_id == workout_id,
-                    Exercise.order == exercise_data.order
-                ).first()
-                
-                if not existing_exercise:
+                db_exercise = None
+                if exercise_data.id is not None:
+                    db_exercise = session.query(Exercise).filter(
+                        Exercise.id == exercise_data.id,
+                        Exercise.workout_id == workout_id
+                    ).first()
+
+                if db_exercise is None:
+                    # Fall back to matching by order, for callers that don't send an id
+                    db_exercise = session.query(Exercise).filter(
+                        Exercise.workout_id == workout_id,
+                        Exercise.order == exercise_data.order
+                    ).first()
+
+                if db_exercise is None:
                     # Create new exercise
                     db_exercise = Exercise(
                         workout_id=workout_id,
@@ -304,23 +317,45 @@ async def update_workout(workout_id: int, workout_update: WorkoutUpdate):
                         order=exercise_data.order
                     )
                     session.add(db_exercise)
-                    session.commit()
-                    session.refresh(db_exercise)
-                    
-                    # Also add sets for this exercise if provided
-                    if hasattr(exercise_data, 'sets') and exercise_data.sets:
-                        for set_data in exercise_data.sets:
-                            db_set = ExerciseSet(
-                                exercise_id=db_exercise.id,
-                                order=set_data.order,
-                                reps=set_data.reps,
-                                weight_kg=set_data.weight_kg,
-                                to_failure=set_data.to_failure,
-                                rest_seconds=set_data.rest_seconds,
-                                note=set_data.note
-                            )
+                else:
+                    # Update existing exercise's fields
+                    db_exercise.name = exercise_data.name
+                    db_exercise.order = exercise_data.order
+                session.commit()
+                session.refresh(db_exercise)
+
+                # Sync sets for this exercise if provided
+                if exercise_data.sets is not None:
+                    kept_set_ids = set()
+                    for set_data in exercise_data.sets:
+                        db_set = None
+                        if set_data.id is not None:
+                            db_set = session.query(ExerciseSet).filter(
+                                ExerciseSet.id == set_data.id,
+                                ExerciseSet.exercise_id == db_exercise.id
+                            ).first()
+
+                        if db_set is None:
+                            db_set = ExerciseSet(exercise_id=db_exercise.id)
                             session.add(db_set)
+
+                        db_set.order = set_data.order
+                        db_set.reps = set_data.reps
+                        db_set.weight_kg = set_data.weight_kg
+                        db_set.hold_seconds = set_data.hold_seconds
+                        db_set.to_failure = set_data.to_failure
+                        db_set.rest_seconds = set_data.rest_seconds
+                        db_set.note = set_data.note
                         session.commit()
+                        session.refresh(db_set)
+                        kept_set_ids.add(db_set.id)
+
+                    # Remove sets that are no longer present (e.g. deleted client-side)
+                    session.query(ExerciseSet).filter(
+                        ExerciseSet.exercise_id == db_exercise.id,
+                        ExerciseSet.id.not_in(kept_set_ids)
+                    ).delete(synchronize_session=False)
+                    session.commit()
         
         # Get all exercises with their sets for the response
         exercises = session.query(Exercise).filter(
@@ -344,6 +379,7 @@ async def update_workout(workout_id: int, workout_update: WorkoutUpdate):
                         order=s.order,
                         reps=s.reps,
                         weight_kg=s.weight_kg,
+                        hold_seconds=s.hold_seconds,
                         to_failure=s.to_failure,
                         rest_seconds=s.rest_seconds,
                         note=s.note

@@ -462,27 +462,26 @@ async function saveExerciseToBackend(exercise, keepSets = false) {
     };
 }
 
-// Render exercises for active workout
-function renderExercises() {
-    const container = document.getElementById('workout-exercises');
-    
-    if (exercisesData.length === 0) {
-        container.innerHTML = '<p style="color: #888; text-align: center;">No exercises yet. Click "+ Add Exercise" to add one.</p>';
-        return;
-    }
-    
-    container.innerHTML = exercisesData.map((exercise, exIndex) => {
-        // Create a unique identifier for the tbody to avoid ID conflicts when exercises are added/replaced
-        const tbodyId = `sets-${exIndex}`;
-        return `
+    // Render exercises for active workout
+    function renderExercises() {
+        const container = document.getElementById('workout-exercises');
+        
+        if (exercisesData.length === 0) {
+            container.innerHTML = '<p style="color: #888; text-align: center;">No exercises yet. Click "+ Add Exercise" to add one.</p>';
+            return;
+        }
+        
+        // Read-only detail view (viewing a finished workout, not editing it)
+        const isLocked = activeWorkout && activeWorkout.readOnly === true;
+        
+        container.innerHTML = exercisesData.map((exercise, exIndex) => {
+            // Create a unique identifier for the tbody to avoid ID conflicts when exercises are added/replaced
+            const tbodyId = `sets-${exIndex}`;
+            return `
         <div class="card" data-exercise-id="${exercise.id || 'temp'}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}" data-internal-index="${exIndex}">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <strong>${exercise.name}</strong>
                 ${!exercise.id ? '<span style="font-size: 0.8rem; color: #888;">(unsaved)</span>' : ''}
-                <div style="display: flex; gap: 0.25rem;">
-                    <button onclick="replaceExercise(${exIndex})" style="background: none; border: none; cursor: pointer; padding: 0.25rem;">🔄</button>
-                    <button onclick="removeExercise(${exIndex})" style="background: none; border: none; cursor: pointer; padding: 0.25rem;">🗑️</button>
-                </div>
             </div>
             
             <table class="set-table" style="width: 100%; border-collapse: collapse; margin-top: 0.75rem; font-size: 0.85rem;">
@@ -502,13 +501,23 @@ function renderExercises() {
             </table>
             
             <div style="margin-top: 0.5rem;">
-                <button class="btn btn-secondary add-set-btn" style="font-size: 0.85rem; padding: 0.5rem; background: #1a1a2e !important;" data-exercise-index="${exIndex}">
-                    + Add Set
-                </button>
+                ${isLocked
+                    ? ''
+                    : `<button class="btn btn-secondary add-set-btn" style="font-size: 0.85rem; padding: 0.5rem; background: #1a1a2e !important;" data-exercise-index="${exIndex}">
+                        + Add Set
+                    </button>`}
             </div>
         </div>
     `}).join('');
-}
+        
+        // Update finish button visibility based on lock state
+        const finishBtn = document.getElementById('finish-workout');
+        if (isLocked && finishBtn) {
+            finishBtn.style.display = 'none';
+        } else if (!isLocked && finishBtn) {
+            finishBtn.style.display = 'block';
+        }
+    }
 
 // Sync input values to state - called on every input change
 window.syncSetInputToState = function(exerciseIndex, setIndex, field, value) {
@@ -526,7 +535,7 @@ window.syncSetInputToState = function(exerciseIndex, setIndex, field, value) {
     }
 };
 
-// Render set rows for a given exercise
+    // Render set rows for a given exercise
 function renderSetRows(exercise, exIndex) {
     const sets = exercise.sets || [];
     
@@ -534,11 +543,47 @@ function renderSetRows(exercise, exIndex) {
         return '<tr><td colspan="6" style="text-align: center; color: #999; padding: 0.5rem;">No sets added yet</td></tr>';
     }
     
+    // Read-only detail view (viewing a finished workout, not editing it)
+    const isLocked = activeWorkout && activeWorkout.readOnly === true;
+
     // Sets are always numbered sequentially 1, 2, 3... based on position
     return sets.map((set, setIndex) => {
         const weightVal = set.weight_kg !== null ? set.weight_kg : '';
         const repsVal = set.reps !== null ? set.reps : '';
+        const hasHold = set.hold_seconds !== null && set.hold_seconds !== undefined && set.hold_seconds !== '';
+        const repsDisplay = hasHold
+            ? (repsVal !== '' ? `${repsVal} reps · ${set.hold_seconds}s hold` : `${set.hold_seconds}s hold`)
+            : (repsVal !== '' ? `${repsVal} reps` : '');
         
+        // For active workouts: show inputs + checkbox + bin icon
+        if (!isLocked) {
+            return `
+            <tr data-set-id="${set.id || 'temp-set-' + (setIndex + 1)}" class="${set.completed ? 'completed-set' : ''}">
+                <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
+                    <span style="color: ${set.completed ? '#28a745' : '#666'}; font-weight: ${set.completed ? 'bold' : 'normal'};">Set ${setIndex + 1}</span>
+                </td>
+                <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
+                    <span style="color: #999;">—</span>
+                </td>
+                <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
+                    <input type="number" class="set-weight" data-set-index="${setIndex}" value="${weightVal}" placeholder="kg" min="0" step="0.5" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;" oninput="syncSetInputToState(${exIndex}, ${setIndex}, 'weight_kg', this.value)">
+                </td>
+                <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
+                    <input type="number" class="set-reps" data-set-index="${setIndex}" value="${repsVal}" placeholder="reps" min="1" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;" oninput="syncSetInputToState(${exIndex}, ${setIndex}, 'reps', this.value)">
+                </td>
+                 <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
+                    <label style="cursor: pointer; display: flex; align-items: center; justify-content: center; width: 100%;">
+                        <input type="checkbox" class="set-checkbox" style="width: 18px; height: 18px; cursor: pointer;" ${set.completed ? 'checked' : ''} onchange="toggleSetCompleted(${exIndex}, ${setIndex}, this)">
+                    </label>
+                </td>
+                <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
+                    <button onclick="removeSet(${exIndex}, ${setIndex})" style="background: none; border: none; cursor: pointer; padding: 0.25rem; color: #dc3545;">🗑️</button>
+                </td>
+            </tr>
+        `;
+        }
+        
+        // For locked (finished) workouts: show values only, no bin icon
         return `
         <tr data-set-id="${set.id || 'temp-set-' + (setIndex + 1)}" class="${set.completed ? 'completed-set' : ''}">
             <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
@@ -547,22 +592,13 @@ function renderSetRows(exercise, exIndex) {
             <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
                 <span style="color: #999;">—</span>
             </td>
-            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
-                <input type="number" class="set-weight" data-set-index="${setIndex}" value="${weightVal}" placeholder="kg" min="0" step="0.5" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;" oninput="syncSetInputToState(${exIndex}, ${setIndex}, 'weight_kg', this.value)">
-            </td>
-            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
-                <input type="number" class="set-reps" data-set-index="${setIndex}" value="${repsVal}" placeholder="reps" min="1" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;" oninput="syncSetInputToState(${exIndex}, ${setIndex}, 'reps', this.value)">
-            </td>
-             <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
-                <label style="cursor: pointer; display: flex; align-items: center; justify-content: center; width: 100%;">
-                    <input type="checkbox" class="set-checkbox" style="width: 18px; height: 18px; cursor: pointer;" ${set.completed ? 'checked' : ''} onchange="toggleSetCompleted(${exIndex}, ${setIndex}, this)">
-                </label>
-            </td>
-            <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
-                <button onclick="removeSet(${exIndex}, ${setIndex})" style="background: none; border: none; cursor: pointer; padding: 0.25rem; color: #dc3545;">🗑️</button>
-            </td>
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;"><span style="color: #666;">${weightVal !== '' ? weightVal + 'kg' : ''}</span></td>
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;"><span style="color: #666;">${repsDisplay}</span></td>
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;"></td>
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;"></td>
         </tr>
-    `}).join('');
+    `;
+    }).join('');
 }
 
 // Add new set - immediately creates a permanent set in local state
@@ -861,9 +897,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Start the timer
                 timer.start();
                 
-                // Reset exercises data for new workout
-                exercisesData = [];
+                // Reset exercises data for new workout - ensure we have a NEW array, not just empty
+                if (exercisesData === null || exercisesData === undefined) {
+                    exercisesData = [];
+                } else {
+                    exercisesData.length = 0; // Clear existing array
+                }
+                
                 renderExercises();
+                
+                // Ensure finish button is enabled for new workout
+                const finishBtn = document.getElementById('finish-workout');
+                if (finishBtn) {
+                    finishBtn.textContent = 'Finish';
+                    finishBtn.disabled = false;
+                    finishBtn.style.opacity = '1';
+                }
+                
+                console.log('New workout started, activeWorkout:', activeWorkout);
                 
             } catch (error) {
                 console.error('Error starting workout:', error);
@@ -877,45 +928,87 @@ document.addEventListener('DOMContentLoaded', () => {
     if (finishWorkoutBtn) {
         finishWorkoutBtn.addEventListener('click', async () => {
             if (!activeWorkout) return;
-            
+
+            // Editing a past (already finished) workout: persist the edits
+            // without touching finished_at/duration_seconds or the timer.
+            if (activeWorkout.isPastEdit) {
+                try {
+                    const nameInput = document.getElementById('workout-name-input');
+                    const exercisesPayload = exercisesData.map(ex => ({
+                        id: ex.id,
+                        name: ex.name,
+                        order: ex.order,
+                        sets: (ex.sets || []).map(set => ({
+                            id: set.id,
+                            order: set.order,
+                            reps: set.reps,
+                            weight_kg: set.weight_kg,
+                            hold_seconds: set.hold_seconds,
+                            to_failure: set.to_failure,
+                            rest_seconds: set.rest_seconds,
+                            note: set.note
+                        }))
+                    }));
+
+                    await api.patch(`/workouts/${activeWorkout.id}`, {
+                        notes: nameInput ? nameInput.value.trim() : undefined,
+                        exercises: exercisesPayload
+                    });
+
+                    activeWorkout = null;
+                    exercisesData = [];
+
+                    document.getElementById('active-workout-section').style.display = 'none';
+                    document.getElementById('start-workout-section').style.display = 'block';
+
+                    alert('Workout updated!');
+
+                    loadWorkouts();
+                } catch (error) {
+                    console.error('Error saving workout edits:', error);
+                    alert('Failed to save changes');
+                }
+                return;
+            }
+
             try {
                 // Stop the timer
                 timer.stop();
-                
-                const workoutDetail = await api.get(`/workouts/${activeWorkout.id}`);
-                
+
                 // Count unchecked sets before filtering
                 let uncheckedCount = 0;
-                workoutDetail.exercises.forEach(ex => {
+                exercisesData.forEach(ex => {
                     (ex.sets || []).forEach(set => {
                         if (!set.completed) uncheckedCount++;
                     });
                 });
-                
-                // Filter out unchecked sets (only completed sets are kept)
-                const exercisesPayload = workoutDetail.exercises.map(ex => ({
+
+                // Save ALL sets - not just completed ones
+                const nameInput = document.getElementById('workout-name-input');
+                const exercisesPayload = exercisesData.map(ex => ({
                     id: ex.id,
                     name: ex.name,
                     order: ex.order,
-                    sets: (ex.sets || []).filter(set => set.completed).map((set, i) => ({
+                    sets: (ex.sets || []).map(set => ({
                         id: set.id,
                         order: set.order,
                         reps: set.reps,
                         weight_kg: set.weight_kg,
+                        hold_seconds: set.hold_seconds,
                         to_failure: set.to_failure,
                         rest_seconds: set.rest_seconds,
                         note: set.note
                     }))
                 }));
-                
+
                 // Update workout with finish info and filtered sets
                 const finishedAt = new Date().toISOString();
                 await api.patch(`/workouts/${activeWorkout.id}`, {
                     finished_at: finishedAt,
-                    notes: workoutDetail.notes,
+                    notes: nameInput ? nameInput.value.trim() : undefined,
                     exercises: exercisesPayload
                 });
-                
+
                 // Reset active workout state
                 activeWorkout = null;
                 exercisesData = [];
@@ -927,10 +1020,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Reset timer
                 timer.reset();
                 
-                let message = `Workout finished! Duration: ${timer.getFormattedTime()}`;
-                if (uncheckedCount > 0) {
-                    message += `\n\n${uncheckedCount} unchecked set${uncheckedCount === 1 ? '' : 's'} were removed.`;
-                }
+                let message = `Workout finished! Duration: ${timer.getFormattedTime()}\n\nAll sets have been saved. You can edit past workouts using the "Edit" button in the History tab.`;
                 
                 alert(message);
                 
@@ -981,10 +1071,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 const startedAt = new Date(workout.started_at);
                 const dateStr = startedAt.toLocaleDateString();
                 const timeStr = startedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const durationStr = workout.duration_seconds 
+                const durationStr = workout.duration_seconds
                     ? `${Math.floor(workout.duration_seconds / 60)} min`
                     : 'Active';
-                
+                const isFinished = workout.finished_at !== null;
+
                 return `
                     <div class="workout-item" onclick="openWorkout(${workout.id})">
                         <div class="workout-header">
@@ -992,6 +1083,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             <span class="workout-duration">${durationStr}</span>
                         </div>
                         ${workout.notes ? `<div class="workout-notes">${workout.notes}</div>` : ''}
+                        ${isFinished ? `<button onclick="event.stopPropagation(); openHistoryWorkoutEdit(${workout.id})" style="margin-top: 0.5rem; width: 100%; padding: 0.6rem; background: #1a1a2e; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85rem;">Edit</button>` : ''}
                     </div>
                 `;
             }).join('');
@@ -1007,32 +1099,49 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const workout = await api.get(`/workouts/${workoutId}`);
             
+            // Debug: Log the workout data to see what we received
+            console.log('openWorkout - Workout data:', workout);
+            
             activeWorkout = {
                 id: workout.id,
                 started_at: workout.started_at,
-                finished_at: workout.finished_at
+                finished_at: workout.finished_at,
+                readOnly: workout.finished_at !== null,
+                isPastEdit: false
             };
-            
+
             exercisesData = workout.exercises;
             
+            // Debug: Log the exercises data
+            console.log('openWorkout - Exercises data:', workout.exercises);
+            
+            // Check if any exercise has sets
+            const exercisesWithSets = workout.exercises?.filter(ex => (ex.sets || []).length > 0);
+            console.log('openWorkout - Exercises with sets:', exercisesWithSets);
+            
+            // Debug: Show total exercises count and total sets count
+            const totalExercises = workout.exercises?.length || 0;
+            const totalSets = workout.exercises?.reduce((sum, ex) => sum + ((ex.sets || []).length), 0) || 0;
+            console.log(`openWorkout - Total exercises: ${totalExercises}, Total sets: ${totalSets}`);
+
             // Hide start button, show active workout section
             document.getElementById('start-workout-section').style.display = 'none';
             document.getElementById('active-workout-section').style.display = 'block';
-            
+
             // Set active workout ID display
             document.getElementById('active-workout-id').textContent = `Workout #${workout.id}`;
-            
+
             // Set workout title with day/date
             const startedAt = new Date(workout.started_at);
             const dateStr = startedAt.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
             const workoutTitle = workout.notes || `Workout #${workout.id}`;
             document.getElementById('workout-title').textContent = `${workoutTitle} - ${dateStr}`;
-            
+
             // Set workout name input (for editing)
             const nameInput = document.getElementById('workout-name-input');
             if (nameInput) {
                 nameInput.value = workout.notes || '';
-                
+
                 // Save notes when input changes
                 nameInput.addEventListener('blur', async () => {
                     try {
@@ -1044,7 +1153,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 });
             }
-            
+
             // Set timer display based on duration - always stop timer for past workouts
             if (workout.duration_seconds !== null) {
                 updateTimerDisplay(workout.duration_seconds);
@@ -1053,9 +1162,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 timer.stop();
                 updateTimerDisplay(0);
             }
-            
+
             // Disable finish button if workout is already finished
             const finishBtn = document.getElementById('finish-workout');
+            finishBtn.textContent = 'Finish';
             if (workout.finished_at) {
                 finishBtn.disabled = true;
                 finishBtn.style.opacity = '0.5';
@@ -1063,11 +1173,86 @@ document.addEventListener('DOMContentLoaded', () => {
                 finishBtn.disabled = false;
                 finishBtn.style.opacity = '1';
             }
-            
+
             renderExercises();
-            
+
         } catch (error) {
             console.error('Error opening workout:', error);
+            alert('Failed to load workout');
+        }
+    };
+    
+    // Open a past (finished) workout in the editable interface, without
+    // touching its timer or original duration. Saving PATCHes the existing
+    // workout instead of finishing it.
+    window.openHistoryWorkoutEdit = async (workoutId) => {
+        try {
+            const workout = await api.get(`/workouts/${workoutId}`);
+
+            activeWorkout = {
+                id: workout.id,
+                started_at: workout.started_at,
+                finished_at: workout.finished_at,
+                readOnly: false,
+                isPastEdit: true
+            };
+
+            exercisesData = workout.exercises;
+            // These sets already happened - show them as checked off.
+            exercisesData.forEach(ex => {
+                (ex.sets || []).forEach(set => { set.completed = true; });
+            });
+
+            // Hide start button, show active workout section
+            document.getElementById('start-workout-section').style.display = 'none';
+            document.getElementById('active-workout-section').style.display = 'block';
+
+            // Set active workout ID display
+            document.getElementById('active-workout-id').textContent = `Workout #${workout.id}`;
+
+            // Set workout title with day/date
+            const startedAt = new Date(workout.started_at);
+            const dateStr = startedAt.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+            const workoutTitle = workout.notes || `Workout #${workout.id}`;
+            document.getElementById('workout-title').textContent = `${workoutTitle} - ${dateStr}`;
+
+            // Set workout name input (for editing)
+            const nameInput = document.getElementById('workout-name-input');
+            if (nameInput) {
+                nameInput.value = workout.notes || '';
+
+                // Save notes when input changes
+                nameInput.addEventListener('blur', async () => {
+                    try {
+                        await api.patch(`/workouts/${activeWorkout.id}`, {
+                            notes: nameInput.value.trim()
+                        });
+                    } catch (error) {
+                        console.error('Error saving workout name:', error);
+                    }
+                });
+            }
+
+            // Show the original duration - do NOT start the timer
+            if (workout.duration_seconds !== null) {
+                updateTimerDisplay(workout.duration_seconds);
+            } else {
+                updateTimerDisplay(0);
+            }
+            timer.stop();
+
+            // Enable the action button in "Save" mode (persists edits, doesn't finish)
+            const finishBtn = document.getElementById('finish-workout');
+            if (finishBtn) {
+                finishBtn.textContent = 'Save';
+                finishBtn.disabled = false;
+                finishBtn.style.opacity = '1';
+            }
+
+            renderExercises();
+
+        } catch (error) {
+            console.error('Error opening workout for editing:', error);
             alert('Failed to load workout');
         }
     };
@@ -1094,6 +1279,17 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Clear timer display
         updateTimerDisplay(0);
+        
+        // Reset finish button state (enable it for new workouts)
+        const finishBtn = document.getElementById('finish-workout');
+        if (finishBtn) {
+            finishBtn.textContent = 'Finish';
+            finishBtn.disabled = false;
+            finishBtn.style.opacity = '1';
+        }
+
+        // Clear any exercises display
+        document.getElementById('workout-exercises').innerHTML = '';
     };
     
     // Go back to home/workout list (legacy)

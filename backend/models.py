@@ -65,6 +65,7 @@ class ExerciseSet(SQLModel, table=True):
     order: int = Field(..., description="Position/order of this set within the exercise")
     reps: Optional[int] = Field(default=None, description="Number of repetitions")
     weight_kg: Optional[float] = Field(default=None, description="Weight used in kilograms")
+    hold_seconds: Optional[int] = Field(default=None, description="Hold duration in seconds (for time-based exercises like planks)")
     to_failure: bool = Field(default=False, description="Whether this set was taken to muscular failure")
     rest_seconds: Optional[int] = Field(default=None, description="Rest time after this set (in seconds)")
     note: Optional[str] = Field(default=None, description="Optional note about this set")
