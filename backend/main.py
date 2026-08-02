@@ -252,7 +252,7 @@ async def get_workout(workout_id: int):
         )
 
 
-@app.patch("/workouts/{workout_id}", response_model=WorkoutResponse)
+@app.patch("/workouts/{workout_id}", response_model=WorkoutDetailResponse)
 async def update_workout(workout_id: int, workout_update: WorkoutUpdate):
     """
     Update a workout.
@@ -265,7 +265,7 @@ async def update_workout(workout_id: int, workout_update: WorkoutUpdate):
         workout_update: WorkoutUpdate model with new data
         
     Returns:
-        WorkoutResponse: The updated workout record
+        WorkoutDetailResponse: The updated workout record with all exercises and sets
     """
     from typing import Dict
     
@@ -322,15 +322,46 @@ async def update_workout(workout_id: int, workout_update: WorkoutUpdate):
                             session.add(db_set)
                         session.commit()
         
+        # Get all exercises with their sets for the response
+        exercises = session.query(Exercise).filter(
+            Exercise.workout_id == workout_id
+        ).order_by(Exercise.order).all()
+        
+        exercises_list = []
+        for exercise in exercises:
+            sets = session.query(ExerciseSet).filter(
+                ExerciseSet.exercise_id == exercise.id
+            ).order_by(ExerciseSet.order).all()
+            
+            exercises_list.append(ExerciseResponse(
+                id=exercise.id,
+                workout_id=exercise.workout_id,
+                name=exercise.name,
+                order=exercise.order,
+                sets=[
+                    ExerciseSetResponse(
+                        id=s.id,
+                        order=s.order,
+                        reps=s.reps,
+                        weight_kg=s.weight_kg,
+                        to_failure=s.to_failure,
+                        rest_seconds=s.rest_seconds,
+                        note=s.note
+                    )
+                    for s in sets
+                ]
+            ))
+        
         # Refresh workout with final state
         session.refresh(db_workout)
         
-        return WorkoutResponse(
+        return WorkoutDetailResponse(
             id=db_workout.id,
             started_at=db_workout.started_at.isoformat(),
             finished_at=db_workout.finished_at.isoformat() if db_workout.finished_at else None,
             duration_seconds=db_workout.duration_seconds,
-            notes=db_workout.notes
+            notes=db_workout.notes,
+            exercises=exercises_list
         )
 
 

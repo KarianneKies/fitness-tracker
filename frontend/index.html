@@ -361,11 +361,18 @@
                 <div id="active-workout-section" style="display: none;">
                     <div class="card">
                         <div class="active-workout-header">
-                            <div>
-                                <h3>Active Workout</h3>
-                                <span class="workout-id" id="active-workout-id"></span>
-                            </div>
+                            <h3 id="workout-title" style="margin: 0;">Active Workout</h3>
+                            <span class="workout-id" id="active-workout-id"></span>
+                            <button onclick="closeActiveWorkout()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; padding: 0.25rem; color: #666;">&times;</button>
+                        </div>
+                        
+                        <div class="active-workout-controls" style="display: flex; justify-content: space-between; align-items: center; margin-top: 1rem;">
                             <button id="finish-workout" class="btn">Finish</button>
+                        </div>
+                        
+                        <div style="margin-bottom: 1rem;">
+                            <label for="workout-name-input" style="font-size: 0.85rem; color: #666;">Workout Name:</label>
+                            <input type="text" id="workout-name-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.9rem;" placeholder="e.g., Upper Body Push Day">
                         </div>
                         
                         <div class="timer-display" id="workout-timer">00:00</div>
@@ -429,6 +436,6 @@
         </main>
     </div>
     
-    <script type="module" src="app.js?v=20240803"></script>
+    <script type="module" src="app.js?v=20260803-3"></script>
 </body>
 </html>

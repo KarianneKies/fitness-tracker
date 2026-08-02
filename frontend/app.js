@@ -208,6 +208,8 @@ function filterExercises(searchTerm) {
 
 // Show exercise picker modal
 function showExercisePicker() {
+    console.log('showExercisePicker called');
+    
     // Create modal overlay if not exists
     let modal = document.getElementById('exercise-picker-modal');
     if (!modal) {
@@ -298,6 +300,8 @@ function showExercisePicker() {
         renderExerciseList();
     } else {
         modal.style.display = 'flex';
+        // Clear replaceIndex when just opening the picker to add a new exercise
+        delete modal.dataset.replaceIndex;
         currentExerciseNameFilter = '';
         document.querySelector('#exercise-picker-modal input').value = '';
         renderExerciseList();
@@ -341,6 +345,9 @@ window.selectExercise = function(exerciseName) {
         exerciseName = exerciseName.replace('Custom: "', '').replace('"', '');
     }
     
+    // Check if we're replacing an existing exercise
+    const replaceIndex = modal.dataset.replaceIndex;
+    
     // Add to active workout
     if (activeWorkout && exerciseName) {
         const newExercise = {
@@ -351,42 +358,107 @@ window.selectExercise = function(exerciseName) {
             sets: []
         };
         
-        exercisesData.push(newExercise);
-        
-        // Save to backend immediately
-        saveExerciseToBackend(newExercise)
-            .then(savedExercise => {
-                // Replace temp exercise with saved one
-                const tempIndex = exercisesData.findIndex(ex => !ex.id);
-                if (tempIndex !== -1) {
-                    exercisesData[tempIndex] = savedExercise;
-                    renderExercises();
-                }
-            })
-            .catch(err => {
-                console.error('Error saving exercise:', err);
-                alert('Failed to save exercise');
-            });
+        if (replaceIndex !== undefined) {
+            // Replace existing exercise
+            const index = parseInt(replaceIndex);
+            if (index >= 0 && index < exercisesData.length) {
+                // Get the existing sets from the exercise being replaced
+                const existingSets = exercisesData[index].sets || [];
+                
+                // Create new exercise with existing sets
+                const newExerciseWithSets = {
+                    id: null,
+                    workout_id: activeWorkout.id,
+                    name: exerciseName,
+                    order: index + 1, // Keep same order
+                    sets: existingSets.length > 0 ? [...existingSets] : []
+                };
+                
+                // Replace in local state
+                exercisesData[index] = newExerciseWithSets;
+                
+                // Save to backend, keeping the sets
+                saveExerciseToBackend(newExerciseWithSets, true)
+                    .then(saved => {
+                        exercisesData[index] = saved;
+                        renderExercises();
+                        hideExercisePicker();
+                    })
+                    .catch(err => {
+                        console.error('Error saving replacement:', err);
+                        alert('Failed to save exercise');
+                    });
+            }
+        } else {
+            // Add new exercise
+            exercisesData.push(newExercise);
+            
+            console.log('Before save:', exercisesData.length, 'exercises');
+            
+            // Save to backend immediately
+            saveExerciseToBackend(newExercise, true)
+                .then(savedExercise => {
+                    console.log('Saved exercise:', savedExercise);
+                    // Replace temp exercise with saved one - create a copy to avoid reference issues
+                    const tempIndex = exercisesData.findIndex(ex => !ex.id);
+                    console.log('Temp index found:', tempIndex);
+                    if (tempIndex !== -1) {
+                        // Make a deep copy of the saved exercise to avoid reference issues
+                        exercisesData[tempIndex] = JSON.parse(JSON.stringify(savedExercise));
+                        console.log('After replace:', exercisesData);
+                        renderExercises();
+                    }
+                })
+                .catch(err => {
+                    console.error('Error saving exercise:', err);
+                    alert('Failed to save exercise');
+                });
+        }
     }
     
     hideExercisePicker();
 };
 
 // Save exercise to backend
-async function saveExerciseToBackend(exercise) {
-    const response = await api.patch(`/workouts/${activeWorkout.id}`, {
-        exercises: [{
-            name: exercise.name,
-            order: exercise.order
-        }]
+async function saveExerciseToBackend(exercise, keepSets = false) {
+    // Build exercise payload with sets if we want to preserve them
+    const exercisePayload = {
+        name: exercise.name,
+        order: exercise.order
+    };
+    
+    // If keeping sets and they exist, include them in the payload
+    if (keepSets && exercise.sets && exercise.sets.length > 0) {
+        exercisePayload.sets = exercise.sets.map(s => ({
+            order: s.order,
+            reps: s.reps,
+            weight_kg: s.weight_kg,
+            to_failure: s.to_failure || false
+        }));
+    }
+    
+    // Update the workout with exercise
+    await api.patch(`/workouts/${activeWorkout.id}`, {
+        exercises: [exercisePayload]
     });
     
+    // Get updated workout with all exercises and their IDs
+    const updatedWorkout = await api.get(`/workouts/${activeWorkout.id}`);
+    
+    // Find the exercise we just added/updated by name and order
+    const savedExercise = updatedWorkout.exercises.find(ex => 
+        ex.name === exercise.name && ex.order === exercise.order
+    );
+    
+    // Return a deep copy of sets to avoid reference issues
+    const returnedSets = keepSets && exercise.sets ? JSON.parse(JSON.stringify(exercise.sets)) : [];
+    
     return {
-        id: response.exercises ? response.exercises[0].id : null,
+        id: savedExercise ? savedExercise.id : null,
         workout_id: activeWorkout.id,
         name: exercise.name,
         order: exercise.order,
-        sets: []
+        sets: returnedSets
     };
 }
 
@@ -399,311 +471,161 @@ function renderExercises() {
         return;
     }
     
-    container.innerHTML = exercisesData.map((exercise, exIndex) => `
-        <div class="card" data-exercise-id="${exercise.id || 'temp-' + exIndex}">
+    container.innerHTML = exercisesData.map((exercise, exIndex) => {
+        // Create a unique identifier for the tbody to avoid ID conflicts when exercises are added/replaced
+        const tbodyId = `sets-${exIndex}`;
+        return `
+        <div class="card" data-exercise-id="${exercise.id || 'temp'}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}" data-internal-index="${exIndex}">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <strong>${exercise.name}</strong>
                 ${!exercise.id ? '<span style="font-size: 0.8rem; color: #888;">(unsaved)</span>' : ''}
+                <div style="display: flex; gap: 0.25rem;">
+                    <button onclick="replaceExercise(${exIndex})" style="background: none; border: none; cursor: pointer; padding: 0.25rem;">🔄</button>
+                    <button onclick="removeExercise(${exIndex})" style="background: none; border: none; cursor: pointer; padding: 0.25rem;">🗑️</button>
+                </div>
             </div>
             
             <table class="set-table" style="width: 100%; border-collapse: collapse; margin-top: 0.75rem; font-size: 0.85rem;">
                 <thead>
                     <tr style="border-bottom: 1px solid #eee;">
-                        <th style="text-align: left; padding: 0.5rem; width: 15%;">Set</th>
-                        <th style="text-align: left; padding: 0.5rem; width: 15%;">Previous</th>
-                        <th style="text-align: left; padding: 0.5rem; width: 25%;">kg</th>
-                        <th style="text-align: left; padding: 0.5rem; width: 25%;">Reps</th>
-                        <th style="text-align: center; padding: 0.5rem; width: 20%;">✓</th>
+                        <th style="text-align: left; padding: 0.5rem; width: 12%;">Set</th>
+                        <th style="text-align: left; padding: 0.5rem; width: 12%;">Previous</th>
+                        <th style="text-align: left; padding: 0.5rem; width: 20%;">kg</th>
+                        <th style="text-align: left; padding: 0.5rem; width: 20%;">Reps</th>
+                        <th style="text-align: center; padding: 0.5rem; width: 12%;">✓</th>
+                        <th style="text-align: center; padding: 0.5rem; width: 12%;">🗑️</th>
                     </tr>
                 </thead>
-                <tbody id="sets-${exercise.id || 'temp-' + exIndex}">
+                <tbody id="${tbodyId}">
                     ${renderSetRows(exercise, exIndex)}
                 </tbody>
             </table>
             
             <div style="margin-top: 0.5rem;">
-                <button class="btn btn-secondary" style="font-size: 0.85rem; padding: 0.5rem; background: #1a1a2e !important;" data-exercise-index="${exIndex}">
+                <button class="btn btn-secondary add-set-btn" style="font-size: 0.85rem; padding: 0.5rem; background: #1a1a2e !important;" data-exercise-index="${exIndex}">
                     + Add Set
                 </button>
             </div>
         </div>
-    `).join('');
+    `}).join('');
 }
+
+// Sync input values to state - called on every input change
+window.syncSetInputToState = function(exerciseIndex, setIndex, field, value) {
+    const exercise = exercisesData[exerciseIndex];
+    if (!exercise || !exercise.sets) return;
+    
+    const set = exercise.sets[setIndex];
+    if (!set) return;
+    
+    // Convert value to proper type
+    if (field === 'weight_kg' || field === 'reps') {
+        set[field] = value !== '' ? (field === 'weight_kg' ? parseFloat(value) : parseInt(value)) : null;
+    } else if (field === 'completed') {
+        set.completed = value;
+    }
+};
 
 // Render set rows for a given exercise
 function renderSetRows(exercise, exIndex) {
     const sets = exercise.sets || [];
     
     if (sets.length === 0) {
-        return '<tr><td colspan="5" style="text-align: center; color: #999; padding: 0.5rem;">No sets added yet</td></tr>';
+        return '<tr><td colspan="6" style="text-align: center; color: #999; padding: 0.5rem;">No sets added yet</td></tr>';
     }
     
-    return sets.map((set, setIndex) => `
-        <tr data-set-id="${set.id || 'temp-set-' + setIndex}">
+    // Sets are always numbered sequentially 1, 2, 3... based on position
+    return sets.map((set, setIndex) => {
+        const weightVal = set.weight_kg !== null ? set.weight_kg : '';
+        const repsVal = set.reps !== null ? set.reps : '';
+        
+        return `
+        <tr data-set-id="${set.id || 'temp-set-' + (setIndex + 1)}" class="${set.completed ? 'completed-set' : ''}">
             <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
-                <span style="color: #666;">Set ${setIndex + 1}</span>
+                <span style="color: ${set.completed ? '#28a745' : '#666'}; font-weight: ${set.completed ? 'bold' : 'normal'};">Set ${setIndex + 1}</span>
             </td>
             <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
                 <span style="color: #999;">—</span>
             </td>
             <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
-                <input type="number" class="set-weight" data-set-index="${setIndex}" value="${set.weight_kg !== null ? set.weight_kg : ''}" placeholder="kg" min="0" step="0.5" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;">
+                <input type="number" class="set-weight" data-set-index="${setIndex}" value="${weightVal}" placeholder="kg" min="0" step="0.5" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;" oninput="syncSetInputToState(${exIndex}, ${setIndex}, 'weight_kg', this.value)">
             </td>
             <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
-                <input type="number" class="set-reps" data-set-index="${setIndex}" value="${set.reps !== null ? set.reps : ''}" placeholder="reps" min="1" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;">
+                <input type="number" class="set-reps" data-set-index="${setIndex}" value="${repsVal}" placeholder="reps" min="1" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;" oninput="syncSetInputToState(${exIndex}, ${setIndex}, 'reps', this.value)">
             </td>
              <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
                 <label style="cursor: pointer; display: flex; align-items: center; justify-content: center; width: 100%;">
-                    <input type="checkbox" class="set-checkbox" style="width: 18px; height: 18px; cursor: pointer;" onchange="toggleSetCompleted(${exIndex}, ${setIndex}, this)" ${set.completed ? 'checked' : ''}>
+                    <input type="checkbox" class="set-checkbox" style="width: 18px; height: 18px; cursor: pointer;" ${set.completed ? 'checked' : ''} onchange="toggleSetCompleted(${exIndex}, ${setIndex}, this)">
                 </label>
             </td>
+            <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
+                <button onclick="removeSet(${exIndex}, ${setIndex})" style="background: none; border: none; cursor: pointer; padding: 0.25rem; color: #dc3545;">🗑️</button>
+            </td>
         </tr>
-    `).join('');
+    `}).join('');
 }
 
-// Show add set form
+// Add new set - immediately creates a permanent set in local state
 window.showAddSetForm = function(exerciseIndex) {
-    console.log('showAddSetForm called with index:', exerciseIndex);
     const exercise = exercisesData[exerciseIndex];
+    
     if (!exercise) {
-        console.error('Exercise not found at index:', exerciseIndex);
-        return;
-cker     }
-    console.log('Found exercise:', exercise.name, 'ID:', exercise.id);
-    
-    // Check if this exercise exists in backend (has ID)
-    const setIndex = (exercise.sets ? exercise.sets.length : 0) + 1;
-    
-    const setHtml = `
-        <tr data-set-id="temp-new-${Date.now()}">
-            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
-                <span style="color: #666;">Set ${setIndex}</span>
-            </td>
-            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
-                <span style="color: #999;">—</span>
-            </td>
-            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
-                <input type="number" class="set-weight" placeholder="kg" min="0" step="0.5" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;">
-            </td>
-            <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
-                <input type="number" class="set-reps" placeholder="reps" min="1" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;">
-            </td>
-             <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
-                <label style="cursor: pointer; display: flex; align-items: center; justify-content: center; width: 100%;">
-                    <input type="checkbox" class="set-checkbox" style="width: 18px; height: 18px; cursor: pointer;" onchange="saveNewSetFromCheckbox(${exerciseIndex}, ${setIndex - 1}, this)">
-                </label>
-            </td>
-        </tr>
-    `;
-    
-    // Find the tbody for this exercise by traversing from the button's context
-    const exerciseRow = document.querySelector(`[data-exercise-id="${exercise.id || 'temp-' + exerciseIndex}"]`);
-    if (!exerciseRow) {
-        console.error('Could not find exercise row for index:', exerciseIndex);
         return;
     }
     
-    const tbody = exerciseRow.querySelector('tbody');
-    if (!tbody) {
-        console.error('Could not find tbody in exercise row:', exercise.id || 'temp-' + exerciseIndex);
-        return;
-    }
+    // Add new set to local state
+    const newSet = {
+        order: (exercise.sets ? exercise.sets.length : 0) + 1,
+        reps: null,
+        weight_kg: null,
+        completed: false
+    };
     
-    tbody.insertAdjacentHTML('beforeend', setHtml);
+    if (!exercise.sets) exercise.sets = [];
+    exercise.sets.push(newSet);
+    
+    // Re-render all exercises
+    renderExercises();
 };
 
-// Save new set from checkbox
-window.saveNewSetFromCheckbox = async function(exerciseIndex, tempSetOrder, checkbox) {
-    if (checkbox.checked) {
-        // Checkbox was just checked - save the set values
-        await window.saveNewSet(exerciseIndex, tempSetOrder);
-    } else {
-        // Checkbox unchecked - remove the set without saving
-        const exercise = exercisesData[exerciseIndex];
-        
-        if (!exercise || !exercise.id) {
-            // For temp exercise, just remove from DOM
-            const row = checkbox.closest('tr');
-            if (row) row.remove();
-            
-            // Update local data
-            if (exercise && exercise.sets && exercise.sets[tempSetOrder]) {
-                exercise.sets.splice(tempSetOrder, 1);
-            }
-        } else {
-            // For saved exercise (shouldn't happen in this context), remove from backend
-            try {
-                const workoutDetail = await api.get(`/workouts/${activeWorkout.id}`);
-                
-                // Build update payload without the removed set
-                const exercisesUpdate = workoutDetail.exercises.map((ex, idx) => ({
-                    id: ex.id,
-                    name: ex.name,
-                    order: ex.order,
-                    sets: (ex.sets || []).filter((s, sIdx) => !(idx === exerciseIndex && sIdx === tempSetOrder))
-                }));
-                
-                await api.patch(`/workouts/${activeWorkout.id}`, {
-                    exercises: exercisesUpdate,
-                    notes: workoutDetail.notes
-                });
-                
-                // Update local state - remove the set
-                if (exercise.sets) {
-                    exercise.sets.splice(tempSetOrder, 1);
-                    renderExercises();
-                }
-            } catch (error) {
-                console.error('Error removing set:', error);
-                alert('Failed to remove set');
-                checkbox.checked = true; // Re-check if failed
-            }
-        }
-    }
-};
-
-// Save new set
-window.saveNewSet = async function(exerciseIndex, tempSetOrder) {
+// Toggle set checkbox - marks set as completed/not completed (frontend only)
+window.toggleSetCompleted = function(exerciseIndex, setIndex, checkbox) {
     const exercise = exercisesData[exerciseIndex];
     if (!exercise) return;
     
-    // Find the temp row by traversing from exercise row
-    const exerciseRow = document.querySelector(`[data-exercise-id="${exercise.id || 'temp-' + exerciseIndex}"]`);
-    if (!exerciseRow) {
-        console.error('Could not find exercise row for temp set saving');
-        return;
-    }
+    // Find the row using the current DOM structure - use tbody by its index-based ID
+    const tbodyId = `sets-${exerciseIndex}`;
+    const tbody = document.getElementById(tbodyId);
+    if (!tbody) return;
     
-    const tbody = exerciseRow.querySelector('tbody');
-    if (!tbody) {
-        console.error('Could not find tbody for temp set saving');
-        return;
-    }
+    const allRows = tbody.querySelectorAll('tr');
+    if (setIndex >= allRows.length) return;
     
-    const tempRow = tbody.querySelector('[data-set-id*="temp-new-"]');
-    if (!tempRow) {
-        console.error('Could not find temp row in tbody');
-        return;
-    }
+    const row = allRows[setIndex];
+    if (!row) return;
     
-    // Get values from inputs in this row
-    const weightInput = tempRow.querySelector('.set-weight');
-    const repsInput = tempRow.querySelector('.set-reps');
-    
-    if (!weightInput || !repsInput) return;
-    
-    const set = {
-        order: tempSetOrder + 1,
-        reps: parseInt(repsInput.value) || null,
-        weight_kg: parseFloat(weightInput.value) || null,
-        to_failure: false,
-        rest_seconds: null,
-        note: ''
-    };
-    
-    // Remove the temporary row
-    tempRow.remove();
-    
-    // For new exercise, add to local state immediately
-    if (!exercise.id) {
-        if (!exercise.sets) exercise.sets = [];
-        exercise.sets.push(set);
-        renderExercises();
-        return;
-    }
-    
-    // For existing exercise, save to backend
-    try {
-        // Get current workout details from backend
-        const workoutDetail = await api.get(`/workouts/${activeWorkout.id}`);
-        
-        // Build the update payload - find which exercise we're updating
-        const exercisesUpdate = workoutDetail.exercises.map((ex, idx) => {
-            if (idx === exerciseIndex) {
-                return {
-                    id: ex.id,
-                    name: ex.name,
-                    order: ex.order,
-                    sets: (ex.sets || []).concat([set])
-                };
-            }
-            return { id: ex.id, name: ex.name, order: ex.order, sets: ex.sets || [] };
-        });
-        
-        // Update workout with new set
-        const updatedWorkout = await api.patch(`/workouts/${activeWorkout.id}`, {
-            exercises: exercisesUpdate,
-            notes: workoutDetail.notes
-        });
-        
-        // Update local state with saved data
-        exercisesData[exerciseIndex].sets = updatedWorkout.exercises[exerciseIndex].sets;
-        
-    } catch (error) {
-        console.error('Error saving set:', error);
-        alert('Failed to save set');
-    }
-};
-
-// Toggle set checkbox - if unchecked, remove the set
-window.toggleSetCompleted = async function(exerciseIndex, setIndex, checkbox) {
-    // Get the row element using the checkbox's context
-    const row = checkbox.closest('tr');
-    
-    if (!checkbox.checked) {
-        // Checkbox unchecked - remove the set
-        const exercise = exercisesData[exerciseIndex];
-        
-        if (!exercise || !exercise.id) {
-            // For temp exercise, just remove from DOM
-            if (row) row.remove();
-            
-            // Update local data - find and remove this set from the exercise
-            if (exercise && exercise.sets) {
-                exercise.sets.splice(setIndex, 1);
-            }
-            return;
-        }
-        
-        // For saved exercise, remove from backend
-        try {
-            const workoutDetail = await api.get(`/workouts/${activeWorkout.id}`);
-            
-            // Build update payload without the removed set
-            const exercisesUpdate = workoutDetail.exercises.map((ex, idx) => ({
-                id: ex.id,
-                name: ex.name,
-                order: ex.order,
-                sets: (ex.sets || []).filter((s, sIdx) => !(idx === exerciseIndex && sIdx === setIndex))
-            }));
-            
-            await api.patch(`/workouts/${activeWorkout.id}`, {
-                exercises: exercisesUpdate,
-                notes: workoutDetail.notes
-            });
-            
-            // Update local state - remove the set from the exercise
-            if (exercise.sets) {
-                exercise.sets.splice(setIndex, 1);
-            }
-            
-            // Remove the row from DOM immediately
-            if (row) row.remove();
-        } catch (error) {
-            console.error('Error removing set:', error);
-            alert('Failed to remove set');
-            checkbox.checked = true; // Re-check if failed
+    // Toggle the completed class for visual styling
+    if (checkbox.checked) {
+        row.classList.add('completed-set');
+        // Update local state
+        if (exercise.sets && exercise.sets[setIndex]) {
+            exercise.sets[setIndex].completed = true;
         }
     } else {
-        // Checkbox checked - save the set values
-        window.saveSet(exerciseIndex, setIndex);
+        row.classList.remove('completed-set');
+        if (exercise.sets && exercise.sets[setIndex]) {
+            exercise.sets[setIndex].completed = false;
+        }
     }
 };
 
 // Save set (update individual weight/reps)
 window.saveSet = async function(exerciseIndex, setIndex) {
     const exercise = exercisesData[exerciseIndex];
-    if (!exercise || !exercise.id) return;
+    
+    if (!exercise || !exercise.id) {
+        return;
+    }
     
     // Find the row using querySelector on tbody by finding the setIndex-th row
     const exerciseRow = document.querySelector(`[data-exercise-id="${exercise.id || 'temp-' + exerciseIndex}"]`);
@@ -770,13 +692,20 @@ window.saveSet = async function(exerciseIndex, setIndex) {
             notes: workoutDetail.notes
         });
         
-        // Update local state with saved data
-        exercisesData[exerciseIndex].sets = workoutDetail.exercises[exerciseIndex].sets.map((s, sIdx) => {
-            if (sIdx === setIndex) {
-                return { ...s, weight_kg: weight_kg !== null ? weight_kg : s.weight_kg, reps: reps !== null ? reps : s.reps };
-            }
-            return s;
-        });
+        // Debug logging
+    console.log('=== saveSet local state update ===');
+    console.log('workoutDetail.exercises[', exerciseIndex, '].sets = ', workoutDetail.exercises[exerciseIndex].sets);
+    
+    // Update local state with saved data
+    exercisesData[exerciseIndex].sets = workoutDetail.exercises[exerciseIndex].sets.map((s, sIdx) => {
+        if (sIdx === setIndex) {
+            console.log(`Updating set ${setIndex}: weight_kg=${weight_kg}, reps=${reps}`);
+            return { ...s, weight_kg: weight_kg !== null ? weight_kg : s.weight_kg, reps: reps !== null ? reps : s.reps };
+        }
+        console.log(`Preserving set ${sIdx}:`, JSON.parse(JSON.stringify(s)));
+        return s;
+    });
+    console.log('exercisesData[', exerciseIndex, '].sets after update:', exercisesData[exerciseIndex].sets);
         
     } catch (error) {
         console.error('Error saving set:', error);
@@ -788,6 +717,120 @@ window.saveSet = async function(exerciseIndex, setIndex) {
 window.cancelNewSet = function(btn) {
     btn.closest('tr').remove();
 };
+
+// Remove exercise from workout
+window.removeExercise = function(exerciseIndex) {
+    console.log('removeExercise called with index:', exerciseIndex);
+    
+    const exercise = exercisesData[exerciseIndex];
+    
+    if (!exercise) {
+        console.log('Exercise not found at index:', exerciseIndex);
+        return;
+    }
+    
+    // If it's a new exercise (no ID), just remove from local state
+    if (!exercise.id) {
+        console.log('Removing temp exercise');
+        exercisesData.splice(exerciseIndex, 1);
+        renderExercises();
+        console.log('After removal, exercisesData length:', exercisesData.length);
+        return;
+    }
+    
+    // If it's a saved exercise, remove from local state
+    // Backend doesn't have delete endpoint for individual exercises,
+    // so this just removes from display. The exercise will remain in database.
+    console.log('Removing saved exercise');
+    exercisesData.splice(exerciseIndex, 1);
+    renderExercises();
+    console.log('After removal, exercisesData length:', exercisesData.length);
+    
+    // Note: To fully remove from database, you'd need to finish the workout
+    // or use a PATCH to rebuild exercises list without this one.
+};
+
+// Replace exercise in workout
+window.replaceExercise = function(exerciseIndex) {
+    showExercisePicker();
+    
+    // Store which exercise to replace (in case modal was just created)
+    const modal = document.getElementById('exercise-picker-modal');
+    if (modal) {
+        modal.dataset.replaceIndex = exerciseIndex;
+        
+        currentExerciseNameFilter = '';
+        document.querySelector('#exercise-picker-modal input').value = '';
+        renderExerciseList();
+    }
+};
+
+// Remove set using bin button (frontend only - no backend calls)
+window.removeSet = function(exerciseIndex, setIndex) {
+    // Get exercise from the global array using index
+    const exercise = exercisesData[exerciseIndex];
+    
+    if (!exercise) {
+        console.error('Exercise not found at index:', exerciseIndex);
+        return;
+    }
+    
+    // Find the tbody by its index-based ID
+    const tbodyId = `sets-${exerciseIndex}`;
+    const tbody = document.getElementById(tbodyId);
+    
+    if (!tbody) {
+        console.error('Could not find tbody with ID:', tbodyId);
+        return;
+    }
+    
+    const allRows = tbody.querySelectorAll('tr');
+    if (setIndex >= allRows.length) return;
+    
+    const rowToRemove = allRows[setIndex];
+    rowToRemove.remove();
+    
+    // Remove from local state
+    if (exercise.sets && setIndex < exercise.sets.length) {
+        exercise.sets.splice(setIndex, 1);
+    }
+    
+    // Renumber remaining sets to keep sequential numbering
+    renumberSets(exerciseIndex);
+};
+
+// Renumber all sets for an exercise to keep sequential numbering
+function renumberSets(exerciseIndex) {
+    const exercise = exercisesData[exerciseIndex];
+    if (!exercise) return;
+    
+    // Find tbody by its index-based ID
+    const tbodyId = `sets-${exerciseIndex}`;
+    const tbody = document.getElementById(tbodyId);
+    
+    if (!tbody) {
+        console.error('Could not find tbody with ID:', tbodyId);
+        return;
+    }
+    
+    // Get all current rows and update their set numbers
+    const allRows = tbody.querySelectorAll('tr');
+    allRows.forEach((row, newIndex) => {
+        const setNumSpan = row.querySelector('td:first-child span');
+        if (setNumSpan) {
+            setNumSpan.textContent = `Set ${newIndex + 1}`;
+        }
+    });
+    
+    // Also update local state set orders
+    if (exercise.sets) {
+        exercise.sets.forEach((set, sIdx) => {
+            if (sIdx < allRows.length) {
+                set.order = sIdx + 1;
+            }
+        });
+    }
+}
 
 // Initialize workout on DOM ready
 document.addEventListener('DOMContentLoaded', () => {
@@ -841,12 +884,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 const workoutDetail = await api.get(`/workouts/${activeWorkout.id}`);
                 
-                // Prepare exercises data with sets
+                // Count unchecked sets before filtering
+                let uncheckedCount = 0;
+                workoutDetail.exercises.forEach(ex => {
+                    (ex.sets || []).forEach(set => {
+                        if (!set.completed) uncheckedCount++;
+                    });
+                });
+                
+                // Filter out unchecked sets (only completed sets are kept)
                 const exercisesPayload = workoutDetail.exercises.map(ex => ({
                     id: ex.id,
                     name: ex.name,
                     order: ex.order,
-                    sets: (ex.sets || []).map((set, i) => ({
+                    sets: (ex.sets || []).filter(set => set.completed).map((set, i) => ({
                         id: set.id,
                         order: set.order,
                         reps: set.reps,
@@ -857,11 +908,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     }))
                 }));
                 
-                // Update workout with finish info
+                // Update workout with finish info and filtered sets
                 const finishedAt = new Date().toISOString();
                 await api.patch(`/workouts/${activeWorkout.id}`, {
                     finished_at: finishedAt,
-                    notes: workoutDetail.notes
+                    notes: workoutDetail.notes,
+                    exercises: exercisesPayload
                 });
                 
                 // Reset active workout state
@@ -875,7 +927,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Reset timer
                 timer.reset();
                 
-                alert(`Workout finished! Duration: ${timer.getFormattedTime()}`);
+                let message = `Workout finished! Duration: ${timer.getFormattedTime()}`;
+                if (uncheckedCount > 0) {
+                    message += `\n\n${uncheckedCount} unchecked set${uncheckedCount === 1 ? '' : 's'} were removed.`;
+                }
+                
+                alert(message);
                 
                 // Reload workouts list
                 loadWorkouts();
@@ -890,7 +947,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Add exercise button - shows picker
     const addExerciseBtn = document.getElementById('start-new-exercise');
     if (addExerciseBtn) {
-        addExerciseBtn.addEventListener('click', () => {
+        addExerciseBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('Add exercise button clicked via', this.tagName, this.id);
             showExercisePicker();
         });
     }
@@ -899,7 +959,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('click', (e) => {
         if (e.target.matches('.add-set-btn')) {
             const exerciseIndex = parseInt(e.target.dataset.exerciseIndex);
-            console.log('Add set button clicked, exercise index:', exerciseIndex);
             showAddSetForm(exerciseIndex);
         }
     });
@@ -963,9 +1022,33 @@ document.addEventListener('DOMContentLoaded', () => {
             // Set active workout ID display
             document.getElementById('active-workout-id').textContent = `Workout #${workout.id}`;
             
-            // Set timer display based on duration
+            // Set workout title with day/date
+            const startedAt = new Date(workout.started_at);
+            const dateStr = startedAt.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+            const workoutTitle = workout.notes || `Workout #${workout.id}`;
+            document.getElementById('workout-title').textContent = `${workoutTitle} - ${dateStr}`;
+            
+            // Set workout name input (for editing)
+            const nameInput = document.getElementById('workout-name-input');
+            if (nameInput) {
+                nameInput.value = workout.notes || '';
+                
+                // Save notes when input changes
+                nameInput.addEventListener('blur', async () => {
+                    try {
+                        await api.patch(`/workouts/${activeWorkout.id}`, {
+                            notes: nameInput.value.trim()
+                        });
+                    } catch (error) {
+                        console.error('Error saving workout name:', error);
+                    }
+                });
+            }
+            
+            // Set timer display based on duration - always stop timer for past workouts
             if (workout.duration_seconds !== null) {
                 updateTimerDisplay(workout.duration_seconds);
+                timer.stop();
             } else {
                 timer.stop();
                 updateTimerDisplay(0);
@@ -979,7 +1062,6 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 finishBtn.disabled = false;
                 finishBtn.style.opacity = '1';
-                timer.start();
             }
             
             renderExercises();
@@ -994,6 +1076,30 @@ document.addEventListener('DOMContentLoaded', () => {
     if (document.querySelector('.tab.active')?.getAttribute('data-tab') === 'workout') {
         window.loadWorkouts();
     }
+    
+    // Close active workout (go back to list)
+    window.closeActiveWorkout = function() {
+        if (!activeWorkout) return;
+        
+        // Stop timer
+        timer.stop();
+        
+        // Hide active workout section, show start button
+        document.getElementById('active-workout-section').style.display = 'none';
+        document.getElementById('start-workout-section').style.display = 'block';
+        
+        // Reset active workout state
+        activeWorkout = null;
+        exercisesData = [];
+        
+        // Clear timer display
+        updateTimerDisplay(0);
+    };
+    
+    // Go back to home/workout list (legacy)
+    window.goBackToHome = function() {
+        closeActiveWorkout();
+    };
 });
 
 // Service Worker registration (if supported)

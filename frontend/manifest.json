@@ -1,6 +1,6 @@
 {
-    "name": "Fitness Tracker",
-    "short_name": "Fitness Tracker",
+    "name": "Kari's Tracker 😊",
+    "short_name": "Kari's Tracker 😊",
     "description": "A personal fitness tracking application",
     "start_url": "/",
     "display": "standalone",
