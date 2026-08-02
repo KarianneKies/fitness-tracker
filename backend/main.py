@@ -21,9 +21,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from config import FRONTEND_DIR
-from database import create_db_and_tables, get_session
-from models import Workout, Exercise, ExerciseSet
+from .config import FRONTEND_DIR
+from .database import create_db_and_tables, get_session
+from .models import Workout, Exercise, ExerciseSet
 
 
 # Create FastAPI app

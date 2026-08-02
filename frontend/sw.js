@@ -4,10 +4,12 @@
  * Service Worker for Fitness Tracker
  * 
  * Provides offline capabilities and background sync.
- * This is a minimal implementation for scaffolding purposes.
  */
 
-const CACHE_NAME = 'fitness-tracker-v2';
+const CACHE_NAME = 'fitness-tracker-v4';
+
+// Always fetch fresh files in development mode
+// Uncomment the cache logic for production
 const ASSETS_TO_CACHE = [
     '/',
     '/index.html',
@@ -24,7 +26,7 @@ self.addEventListener('install', (event) => {
     );
 });
 
-// Activate event - clean up old caches
+// Activate event - clean up old caches and force clients to reload
 self.addEventListener('activate', (event) => {
     event.waitUntil(
         caches.keys().then((cacheNames) => {
@@ -35,13 +37,27 @@ self.addEventListener('activate', (event) => {
             );
         }).then(() => self.clients.claim())
     );
+    
+    // Force all open clients to reload with the new version
+    self.clients.matchAll().then((clients) => {
+        clients.forEach(client => client.postMessage({ type: 'SKIP_WAITING' }));
+    });
 });
 
 // Fetch event - serve from cache, fall back to network
+self.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'SKIP_WAITING') {
+        self.skipWaiting();
+    }
+});
+
+// Fetch event - serve fresh files from network (better for development)
 self.addEventListener('fetch', (event) => {
     event.respondWith(
-        caches.match(event.request)
-            .then((response) => response || fetch(event.request))
+        fetch(event.request).catch(() => {
+            // Fallback to cache if offline
+            return caches.match(event.request);
+        })
     );
 });
 

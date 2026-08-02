@@ -13,7 +13,7 @@ from typing import Iterator
 
 from sqlmodel import SQLModel, create_engine, Session
 
-from config import DATABASE_PATH
+from .config import DATABASE_PATH
 
 # Create the SQLite engine
 engine = create_engine(
