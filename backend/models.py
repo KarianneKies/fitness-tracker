@@ -15,9 +15,9 @@ This module defines all database models:
 """
 
 from datetime import date, datetime
-from typing import Optional
+from typing import List, Optional
 
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, Relationship, SQLModel
 
 
 class Workout(SQLModel, table=True):
@@ -33,8 +33,15 @@ class Workout(SQLModel, table=True):
     started_at: datetime = Field(default_factory=datetime.utcnow, description="When the workout started")
     finished_at: Optional[datetime] = Field(default=None, description="When the workout ended (nullable if active)")
     duration_seconds: Optional[int] = Field(default=None, description="Total workout duration in seconds")
+    name: Optional[str] = Field(default=None, description="Name/title of the workout (e.g., 'Push', 'Lower A')")
     notes: Optional[str] = Field(default=None, description="Notes about the workout")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
+    
+    # Relationship to exercises
+    exercises: Optional[List["Exercise"]] = Relationship(
+        back_populates="workout",
+        sa_relationship_kwargs={"lazy": "dynamic"}
+    )
 
 
 class Exercise(SQLModel, table=True):
@@ -50,6 +57,9 @@ class Exercise(SQLModel, table=True):
     name: str = Field(..., description="Exercise name (e.g., 'Bench Press')")
     order: int = Field(..., description="Position/order of this exercise within the workout")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
+    
+    # Relationship back to workout
+    workout: Optional["Workout"] = Relationship(back_populates="exercises")
 
 
 class ExerciseSet(SQLModel, table=True):

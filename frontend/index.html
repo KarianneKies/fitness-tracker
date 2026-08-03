@@ -278,6 +278,228 @@
             padding: 2rem;
             color: #888;
         }
+        
+        /* History List Cards */
+        .history-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .history-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        
+        .history-card-name {
+            font-weight: bold;
+            color: #1a1a2e;
+            flex: 1;
+        }
+        
+        .history-menu-btn {
+            background: none;
+            border: none;
+            font-size: 1.25rem;
+            cursor: pointer;
+            color: #666;
+            padding: 0.25rem 0.5rem;
+        }
+        
+        .history-card-date {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 0.5rem;
+        }
+        
+        .history-stats {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 0.75rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid #eee;
+        }
+        
+        .history-stat {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-size: 0.85rem;
+            color: #666;
+        }
+        
+        .history-stat-icon {
+            font-size: 0.9rem;
+        }
+        
+        .history-exercises-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        
+        .history-exercises-table th {
+            text-align: left;
+            padding: 0.25rem;
+            color: #999;
+        }
+        
+        .history-exercises-table td {
+            padding: 0.25rem;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .history-exercises-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        /* Month Group Headers */
+        .history-month-header {
+            font-size: 0.85rem;
+            font-weight: bold;
+            color: #e94560;
+            text-transform: uppercase;
+            margin-top: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        /* History Detail View Panel */
+        .history-detail-panel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .history-detail-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem;
+            border-bottom: 1px solid #eee;
+            background: white;
+        }
+        
+        .history-detail-title {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #1a1a2e;
+        }
+        
+        .history-detail-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #666;
+        }
+        
+        .history-detail-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .history-detail-edit-btn {
+            background: #e94560;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        
+        .history-detail-content {
+            flex: 1;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+        
+        .history-detail-date {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 1rem;
+        }
+        
+        .history-detail-stats {
+            display: flex;
+            gap: 1.5rem;
+            padding: 0.75rem 1rem;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+        
+        .history-detail-stat {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .history-detail-stat-icon {
+            font-size: 1rem;
+            color: #e94560;
+        }
+        
+        .history-detail-stat-value {
+            font-weight: bold;
+            color: #1a1a2e;
+        }
+        
+        .history-detail-exercise {
+            margin-bottom: 1rem;
+        }
+        
+        .history-detail-exercise-name {
+            font-weight: bold;
+            color: #1a1a2e;
+            margin-bottom: 0.5rem;
+        }
+        
+        .history-detail-set {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .history-detail-set:last-child {
+            border-bottom: none;
+        }
+        
+        .history-detail-set-info {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .history-detail-set-num {
+            font-family: monospace;
+            color: #666;
+        }
+        
+        .history-detail-set-num-fail {
+            font-family: monospace;
+            color: #dc3545;
+            font-weight: bold;
+        }
+        
+        .history-detail-set-stats {
+            color: #666;
+        }
     </style>
 </head>
 <body>

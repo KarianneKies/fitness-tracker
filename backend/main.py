@@ -55,11 +55,13 @@ app.add_middleware(
 # ========== Workout Models ==========
 class WorkoutCreate(BaseModel):
     """Request model for starting a new workout."""
+    name: Optional[str] = None
     notes: Optional[str] = None
 
 
 class WorkoutUpdate(BaseModel):
     """Request model for updating a workout."""
+    name: Optional[str] = None
     finished_at: Optional[datetime] = None
     notes: Optional[str] = None
     exercises: Optional[List['ExerciseCreate']] = None
@@ -122,7 +124,9 @@ class WorkoutResponse(BaseModel):
     started_at: str
     finished_at: Optional[str]
     duration_seconds: Optional[int]
+    name: Optional[str]
     notes: Optional[str]
+    exercises: List[ExerciseResponse] = []
 
 
 class WorkoutDetailResponse(BaseModel):
@@ -131,6 +135,7 @@ class WorkoutDetailResponse(BaseModel):
     started_at: str
     finished_at: Optional[str]
     duration_seconds: Optional[int]
+    name: Optional[str]
     notes: Optional[str]
     exercises: List[ExerciseResponse]
 
@@ -163,6 +168,7 @@ async def start_workout(workout: WorkoutCreate):
     with get_session() as session:
         db_workout = Workout(
             started_at=datetime.utcnow(),
+            name=workout.name,
             notes=workout.notes
         )
         session.add(db_workout)
@@ -174,6 +180,7 @@ async def start_workout(workout: WorkoutCreate):
             started_at=db_workout.started_at.isoformat(),
             finished_at=None,
             duration_seconds=None,
+            name=db_workout.name,
             notes=db_workout.notes
         )
 
@@ -184,21 +191,56 @@ async def get_workouts():
     Get all workouts, most recent first.
     
     Returns:
-        List[WorkoutResponse]: List of all workouts sorted by start time (newest first)
+        List[WorkoutResponse]: List of all workouts sorted by start time (newest first),
+                               including exercises and their sets
     """
     with get_session() as session:
         workouts = session.query(Workout).order_by(Workout.started_at.desc()).all()
         
-        return [
-            WorkoutResponse(
+        result = []
+        for workout in workouts:
+            # Fetch exercises for this workout
+            exercises = session.query(Exercise).filter(
+                Exercise.workout_id == workout.id
+            ).order_by(Exercise.order).all()
+            
+            exercises_list = []
+            for exercise in exercises:
+                sets = session.query(ExerciseSet).filter(
+                    ExerciseSet.exercise_id == exercise.id
+                ).order_by(ExerciseSet.order).all()
+                
+                exercises_list.append(ExerciseResponse(
+                    id=exercise.id,
+                    workout_id=exercise.workout_id,
+                    name=exercise.name,
+                    order=exercise.order,
+                    sets=[
+                        ExerciseSetResponse(
+                            id=s.id,
+                            order=s.order,
+                            reps=s.reps,
+                            weight_kg=s.weight_kg,
+                            hold_seconds=s.hold_seconds,
+                            to_failure=s.to_failure,
+                            rest_seconds=s.rest_seconds,
+                            note=s.note
+                        )
+                        for s in sets
+                    ]
+                ))
+            
+            result.append(WorkoutResponse(
                 id=workout.id,
                 started_at=workout.started_at.isoformat(),
                 finished_at=workout.finished_at.isoformat() if workout.finished_at else None,
                 duration_seconds=workout.duration_seconds,
-                notes=workout.notes
-            )
-            for workout in workouts
-        ]
+                name=workout.name,
+                notes=workout.notes,
+                exercises=exercises_list
+            ))
+        
+        return result
 
 
 @app.get("/workouts/{workout_id}", response_model=WorkoutDetailResponse)
@@ -252,6 +294,7 @@ async def get_workout(workout_id: int):
             started_at=workout.started_at.isoformat(),
             finished_at=workout.finished_at.isoformat() if workout.finished_at else None,
             duration_seconds=workout.duration_seconds,
+            name=workout.name,
             notes=workout.notes,
             exercises=exercises_list
         )
@@ -287,6 +330,8 @@ async def update_workout(workout_id: int, workout_update: WorkoutUpdate):
             end_time = workout_update.finished_at.replace(tzinfo=None)
             db_workout.duration_seconds = int((end_time - start_time).total_seconds())
         
+        if workout_update.name is not None:
+            db_workout.name = workout_update.name
         if workout_update.notes is not None:
             db_workout.notes = workout_update.notes
         
@@ -396,6 +441,7 @@ async def update_workout(workout_id: int, workout_update: WorkoutUpdate):
             started_at=db_workout.started_at.isoformat(),
             finished_at=db_workout.finished_at.isoformat() if db_workout.finished_at else None,
             duration_seconds=db_workout.duration_seconds,
+            name=db_workout.name,
             notes=db_workout.notes,
             exercises=exercises_list
         )

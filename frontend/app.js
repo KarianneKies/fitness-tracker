@@ -1053,6 +1053,91 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     
+    // Format date as "Monday, 3 Aug"
+    function formatDate(date) {
+        return date.toLocaleDateString('en-US', { weekday: 'long', day: 'numeric', month: 'short' });
+    }
+    
+    // Format date as "Monday, 3 Aug" with year
+    function formatDateWithYear(date) {
+        return date.toLocaleDateString('en-US', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    
+    // Get month group header (e.g., "AUGUST 2026")
+    function getMonthHeader(date) {
+        return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }).toUpperCase();
+    }
+    
+    // Calculate total weight lifted (sum of weight_kg × reps across all sets)
+    function calculateTotalWeight(workout) {
+        let total = 0;
+        if (workout.exercises && workout.exercises.length > 0) {
+            workout.exercises.forEach(ex => {
+                if (ex.sets && ex.sets.length > 0) {
+                    ex.sets.forEach(set => {
+                        if (set.weight_kg !== null && set.reps !== null) {
+                            total += set.weight_kg * set.reps;
+                        }
+                    });
+                }
+            });
+        }
+        return total;
+    }
+    
+    // Format duration from seconds
+    function formatDuration(seconds) {
+        if (!seconds || seconds <= 0) return '—';
+        const totalSeconds = Math.round(seconds);
+        
+        // If under 60 seconds, show seconds
+        if (totalSeconds < 60) {
+            return `${totalSeconds}s`;
+        }
+        
+        const mins = Math.floor(totalSeconds / 60);
+        if (mins < 60) {
+            return `${mins}m`;
+        }
+        
+        const hours = Math.floor(mins / 60);
+        const remainingMins = mins % 60;
+        return remainingMins > 0 ? `${hours}h ${remainingMins}m` : `${hours}h`;
+    }
+    
+    // Get best set for an exercise (highest weight)
+    function getBestSet(exercise) {
+        if (!exercise.sets || exercise.sets.length === 0) return null;
+        
+        let bestSet = null;
+        let maxWeight = -1;
+        
+        exercise.sets.forEach(set => {
+            if (set.weight_kg !== null && set.weight_kg > maxWeight) {
+                maxWeight = set.weight_kg;
+                bestSet = set;
+            }
+        });
+        
+        return bestSet;
+    }
+    
+    // Format a set for display
+    function formatSet(set) {
+        if (!set) return '';
+        
+        const hasHold = set.hold_seconds !== null && set.hold_seconds !== undefined && set.hold_seconds !== '';
+        
+        if (hasHold) {
+            return `${set.weight_kg} kg × ${set.hold_seconds}s hold`;
+        }
+        
+        const repsDisplay = set.reps !== null ? `${set.reps} reps` : '';
+        return set.weight_kg !== null 
+            ? `${set.weight_kg} kg × ${repsDisplay}`.trim() 
+            : (repsDisplay ? repsDisplay : '');
+    }
+    
     // Load workouts when clicking Workout tab
     window.loadWorkouts = async () => {
         const workoutList = document.getElementById('workout-list');
@@ -1067,26 +1152,93 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             
-            workoutList.innerHTML = workouts.map(workout => {
-                const startedAt = new Date(workout.started_at);
-                const dateStr = startedAt.toLocaleDateString();
-                const timeStr = startedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const durationStr = workout.duration_seconds
-                    ? `${Math.floor(workout.duration_seconds / 60)} min`
-                    : 'Active';
-                const isFinished = workout.finished_at !== null;
-
-                return `
-                    <div class="workout-item" onclick="openWorkout(${workout.id})">
-                        <div class="workout-header">
-                            <span class="workout-date">${dateStr} at ${timeStr}</span>
-                            <span class="workout-duration">${durationStr}</span>
+            // Group workouts by month
+            const months = {};
+            workouts.forEach(workout => {
+                const date = new Date(workout.started_at);
+                const monthKey = date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }).toLowerCase();
+                const monthHeader = getMonthHeader(date);
+                
+                if (!months[monthKey]) {
+                    months[monthKey] = { header: monthHeader, workouts: [] };
+                }
+                months[monthKey].workouts.push(workout);
+            });
+            
+            // Render with month grouping
+            let html = '';
+            const sortedKeys = Object.keys(months).sort((a, b) => {
+                // Sort by date descending (most recent first)
+                const dateA = new Date(months[a].workouts[0].started_at);
+                const dateB = new Date(months[b].workouts[0].started_at);
+                return dateB - dateA;
+            });
+            
+            sortedKeys.forEach(monthKey => {
+                const monthData = months[monthKey];
+                
+                html += `<div class="history-month-header">${monthData.header}</div>`;
+                
+                monthData.workouts.forEach(workout => {
+                    const date = new Date(workout.started_at);
+                    const workoutName = (workout.name && workout.name.trim() !== '') 
+                        ? workout.name 
+                        : `Workout #${workout.id}`;
+                    const totalWeight = calculateTotalWeight(workout);
+                    
+                    // Build mini exercises table
+                    let exercisesHtml = '';
+                    if (workout.exercises && workout.exercises.length > 0) {
+                        workout.exercises.forEach(ex => {
+                            const bestSet = getBestSet(ex);
+                            const setCount = ex.sets ? ex.sets.length : 0;
+                            exercisesHtml += `
+                                <tr>
+                                    <td>${setCount} × ${ex.name}</td>
+                                    <td style="white-space: nowrap;">${bestSet ? formatSet(bestSet) : '-'}</td>
+                                </tr>
+                            `;
+                        });
+                    } else {
+                        exercisesHtml = '<tr><td colspan="2" style="text-align: center; color: #999;">No exercises</td></tr>';
+                    }
+                    
+                    html += `
+                        <div class="history-card" onclick="showHistoryDetail(${workout.id})">
+                            <div class="history-card-header">
+                                <span class="history-card-name">${workoutName}</span>
+                                <button class="history-menu-btn" onclick="event.stopPropagation(); showWorkoutMenu(${workout.id}, event)">
+                                    …
+                                </button>
+                            </div>
+                            <div class="history-card-date">${formatDate(date)}</div>
+                            <div class="history-stats">
+                                <span class="history-stat" title="Duration">
+                                    <span class="history-stat-icon">⏱️</span>
+                                    ${formatDuration(workout.duration_seconds)}
+                                </span>
+                                <span class="history-stat" title="Total weight lifted">
+                                    <span class="history-stat-icon">🏋️</span>
+                                    ${totalWeight > 0 ? `${totalWeight} kg` : '—'}
+                                </span>
+                            </div>
+                            <table class="history-exercises-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 60%;">Exercise</th>
+                                        <th>Best Set</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${exercisesHtml}
+                                </tbody>
+                            </table>
                         </div>
-                        ${workout.notes ? `<div class="workout-notes">${workout.notes}</div>` : ''}
-                        ${isFinished ? `<button onclick="event.stopPropagation(); openHistoryWorkoutEdit(${workout.id})" style="margin-top: 0.5rem; width: 100%; padding: 0.6rem; background: #1a1a2e; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85rem;">Edit</button>` : ''}
-                    </div>
-                `;
-            }).join('');
+                    `;
+                });
+            });
+            
+            workoutList.innerHTML = html;
             
         } catch (error) {
             console.error('Error loading workouts:', error);
@@ -1094,8 +1246,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
     
-    // Open workout for editing
-    window.openWorkout = async (workoutId) => {
+    // Open history workout detail view
+    window.openHistoryWorkoutDetail = async (workoutId) => {
         try {
             const workout = await api.get(`/workouts/${workoutId}`);
             
@@ -1295,6 +1447,180 @@ document.addEventListener('DOMContentLoaded', () => {
     // Go back to home/workout list (legacy)
     window.goBackToHome = function() {
         closeActiveWorkout();
+    };
+    
+    // Show workout menu (dropdown options)
+    window.showWorkoutMenu = function(workoutId, event) {
+        event.stopPropagation();
+        event.preventDefault();
+        
+        const menu = document.createElement('div');
+        menu.style.cssText = `
+            position: fixed;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            padding: 0.5rem;
+            z-index: 1100;
+            min-width: 160px;
+        `;
+        
+        menu.innerHTML = `
+            <button onclick="openHistoryWorkoutEdit(${workoutId}); this.closest('div').remove()" style="
+                width: 100%;
+                padding: 0.75rem;
+                text-align: left;
+                background: none;
+                border: none;
+                cursor: pointer;
+                font-size: 0.9rem;
+                color: #1a1a2e;
+            ">Edit</button>
+            <hr style="margin: 0.5rem 0; border: none; border-top: 1px solid #eee;">
+            <button onclick="deleteWorkout(${workoutId}); this.closest('div').remove()" style="
+                width: 100%;
+                padding: 0.75rem;
+                text-align: left;
+                background: none;
+                border: none;
+                cursor: pointer;
+                font-size: 0.9rem;
+                color: #dc3545;
+            ">Delete</button>
+        `;
+        
+        const rect = event.currentTarget.getBoundingClientRect();
+        const top = rect.bottom + window.scrollY;
+        const left = rect.left + window.scrollX;
+        
+        menu.style.top = `${top}px`;
+        menu.style.left = `${left}px`;
+        
+        document.body.appendChild(menu);
+        
+        // Close on click outside
+        const closeMenu = function() {
+            menu.remove();
+            document.removeEventListener('click', closeMenu);
+        };
+        
+        setTimeout(() => {
+            document.addEventListener('click', closeMenu);
+        }, 10);
+    };
+    
+    // Delete workout
+    window.deleteWorkout = async function(workoutId) {
+        if (!confirm('Are you sure you want to delete this workout?')) return;
+        
+        try {
+            await api.delete(`/workouts/${workoutId}`);
+            loadWorkouts();
+        } catch (error) {
+            console.error('Error deleting workout:', error);
+            alert('Failed to delete workout');
+        }
+    };
+    
+    // Show history detail view
+    window.showHistoryDetail = async function(workoutId) {
+        try {
+            const workout = await api.get(`/workouts/${workoutId}`);
+            
+            // Create panel container
+            const panel = document.createElement('div');
+            panel.className = 'history-detail-panel';
+            
+            // Build workout name
+            const workoutName = (workout.name && workout.name.trim() !== '') 
+                ? workout.name 
+                : `Workout #${workout.id}`;
+            
+            const date = new Date(workout.started_at);
+            const totalWeight = calculateTotalWeight(workout);
+            
+            // Build set rows for detail view
+            let exercisesHtml = '';
+            if (workout.exercises && workout.exercises.length > 0) {
+                exercisesHtml = workout.exercises.map(ex => {
+                    const setRows = (ex.sets || []).map((set, idx) => {
+                        const hasHold = set.hold_seconds !== null && set.hold_seconds !== undefined && set.hold_seconds !== '';
+                        
+                        // For failure sets, show "F" instead of number
+                        let setNumDisplay;
+                        if (set.to_failure) {
+                            setNumDisplay = '<span class="history-detail-set-num-fail">F</span>';
+                        } else {
+                            setNumDisplay = `<span class="history-detail-set-num">Set ${idx + 1}</span>`;
+                        }
+                        
+                        // Format the set stats
+                        let statsHtml = '';
+                        if (hasHold) {
+                            statsHtml = `${set.weight_kg} kg × ${set.hold_seconds}s hold`;
+                        } else {
+                            const repsDisplay = set.reps !== null ? `${set.reps} reps` : '';
+                            statsHtml = set.weight_kg !== null 
+                                ? `${set.weight_kg} kg × ${repsDisplay}`.trim() 
+                                : (repsDisplay ? repsDisplay : '');
+                        }
+                        
+                        return `
+                            <div class="history-detail-set">
+                                <div class="history-detail-set-info">
+                                    ${setNumDisplay}
+                                    <span class="history-detail-set-stats">${statsHtml}</span>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                    
+                    return `
+                        <div class="history-detail-exercise">
+                            <div class="history-detail-exercise-name">${ex.name}</div>
+                            ${setRows}
+                        </div>
+                    `;
+                }).join('');
+            } else {
+                exercisesHtml = '<p style="color: #999;">No exercises recorded in this workout.</p>';
+            }
+            
+            // Duration display
+            const durationDisplay = formatDuration(workout.duration_seconds);
+            
+            panel.innerHTML = `
+                <div class="history-detail-header">
+                    <button class="history-detail-close" onclick="this.closest('.history-detail-panel').remove()">×</button>
+                    <div class="history-detail-title">${workoutName}</div>
+                    <div class="history-detail-actions">
+                        <button onclick="openHistoryWorkoutEdit(${workoutId}); this.closest('.history-detail-panel').remove()" class="history-detail-edit-btn">Edit</button>
+                    </div>
+                </div>
+                
+                <div class="history-detail-content">
+                    <div class="history-detail-date">${formatDate(date)} at ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                    
+                    <div class="history-detail-stats">
+                        <div class="history-detail-stat" title="Duration">
+                            <span class="history-detail-stat-icon">⏱️</span>
+                            ${durationDisplay}
+                        </div>
+                        <div class="history-detail-stat" title="Total weight lifted">
+                            <span class="history-detail-stat-icon">🏋️</span>
+                            ${totalWeight > 0 ? `${totalWeight} kg` : '—'}
+                        </div>
+                    </div>
+                    
+                    ${exercisesHtml}
+                </div>
+            `;
+            
+            document.body.appendChild(panel);
+        } catch (error) {
+            console.error('Error loading workout detail:', error);
+            alert('Failed to load workout details');
+        }
     };
 });
 

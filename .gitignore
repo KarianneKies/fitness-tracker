@@ -3,6 +3,9 @@ data/photos/
 data/usda/
 data/openfoodfacts/
 
+# Personal workout export (must never be committed)
+strong_workouts.csv
+
 # Database files
 *.db
 
