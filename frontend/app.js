@@ -168,6 +168,11 @@ function initTabs() {
                     document.getElementById('start-workout-section').style.display = 'block';
                 }
             }
+
+            // Load saved meals for Food tab
+            if (tabId === 'food' && typeof foodSearch !== 'undefined') {
+                foodSearch.loadSavedMeals();
+            }
         });
     });
 }
@@ -2065,19 +2070,26 @@ const foodPhoto = {
 
 // ========== Manual Food Search Functionality ==========
 const foodSearch = {
-    /** Items added to the meal currently being built (in memory, not yet saved) */
+    /** Items added to the meal currently being built (in memory, not yet saved).
+     *  Each item keeps its per-100g macros so grams can be edited live. */
     items: [],
 
     /** Debounce timer for the search input */
     searchDebounce: null,
 
     /**
-     * Wire up the "Add food" button and the meal-in-progress save/clear buttons
+     * Wire up the "Add meal" entry point, the food search button, and the
+     * meal-in-progress save/cancel buttons. Also loads the saved meals list.
      */
     init() {
-        const addBtn = document.getElementById('add-food-btn');
-        if (addBtn) {
-            addBtn.addEventListener('click', () => this.openSearchModal());
+        const addMealBtn = document.getElementById('add-meal-btn');
+        if (addMealBtn) {
+            addMealBtn.addEventListener('click', () => this.openMealBuilder());
+        }
+
+        const addFoodBtn = document.getElementById('add-food-btn');
+        if (addFoodBtn) {
+            addFoodBtn.addEventListener('click', () => this.openSearchModal());
         }
 
         const saveBtn = document.getElementById('save-search-meal-btn');
@@ -2087,8 +2099,49 @@ const foodSearch = {
 
         const clearBtn = document.getElementById('clear-search-meal-btn');
         if (clearBtn) {
-            clearBtn.addEventListener('click', () => this.clearMeal());
+            clearBtn.addEventListener('click', () => this.closeMealBuilder());
         }
+
+        this.loadSavedMeals();
+    },
+
+    /**
+     * Open the meal builder: show the meal type/date fields and the (empty)
+     * item list, and hide the "Add Meal" entry point.
+     */
+    openMealBuilder() {
+        this.items = [];
+
+        const addMealCard = document.getElementById('add-meal-card');
+        if (addMealCard) addMealCard.style.display = 'none';
+
+        const section = document.getElementById('search-meal-section');
+        if (section) section.style.display = 'block';
+
+        const dateInput = document.getElementById('meal-date-input');
+        if (dateInput) {
+            const today = new Date();
+            const localDate = new Date(today.getTime() - today.getTimezoneOffset() * 60000);
+            dateInput.value = localDate.toISOString().slice(0, 10);
+        }
+
+        const typeSelect = document.getElementById('meal-type-select');
+        if (typeSelect) typeSelect.value = '';
+
+        this.renderMeal();
+    },
+
+    /**
+     * Close the meal builder without saving, discarding any added items.
+     */
+    closeMealBuilder() {
+        this.items = [];
+
+        const section = document.getElementById('search-meal-section');
+        if (section) section.style.display = 'none';
+
+        const addMealCard = document.getElementById('add-meal-card');
+        if (addMealCard) addMealCard.style.display = 'block';
     },
 
     /**
@@ -2228,7 +2281,8 @@ const foodSearch = {
 
     /**
      * Handle picking a food from search results: ask for a portion in grams,
-     * scale its per-100g macros, and add it to the meal being built
+     * and add it to the meal being built (per-100g macros kept as-is so the
+     * portion can be edited later without losing precision)
      */
     selectFood(food) {
         const input = window.prompt(`How many grams of "${food.description}"?`, '100');
@@ -2240,21 +2294,55 @@ const foodSearch = {
             return;
         }
 
-        const scale = grams / 100;
         this.items.push({
             fdc_id: food.id,
             name: food.description,
             grams,
-            calories: food.calories_kcal * scale,
-            protein_g: food.protein_g * scale,
-            carbs_g: food.carbs_g * scale,
-            fat_g: food.fat_g * scale,
+            per100: {
+                calories: food.calories_kcal,
+                protein_g: food.protein_g,
+                carbs_g: food.carbs_g,
+                fat_g: food.fat_g,
+            },
         });
 
         const modal = document.getElementById('food-search-modal');
         if (modal) modal.remove();
 
         this.renderMeal();
+    },
+
+    /**
+     * Compute an item's macros for its current grams from its per-100g values
+     */
+    computeMacros(item) {
+        const scale = item.grams / 100;
+        return {
+            calories: item.per100.calories * scale,
+            protein_g: item.per100.protein_g * scale,
+            carbs_g: item.per100.carbs_g * scale,
+            fat_g: item.per100.fat_g * scale,
+        };
+    },
+
+    /**
+     * Handle editing an item's grams: update the model and refresh just that
+     * item's macro text plus the running total (not a full re-render, so the
+     * grams input keeps focus while typing)
+     */
+    updateItemGrams(index, value) {
+        const grams = parseFloat(value);
+        if (isNaN(grams) || grams <= 0) return;
+
+        this.items[index].grams = grams;
+
+        const macros = this.computeMacros(this.items[index]);
+        const macrosEl = document.querySelector(`.item-macros[data-index="${index}"]`);
+        if (macrosEl) {
+            macrosEl.textContent = `${Math.round(macros.calories)} kcal · ${macros.protein_g.toFixed(1)}g P · ${macros.carbs_g.toFixed(1)}g C · ${macros.fat_g.toFixed(1)}g F`;
+        }
+
+        this.updateTotal();
     },
 
     /**
@@ -2266,45 +2354,69 @@ const foodSearch = {
     },
 
     /**
-     * Render the in-progress meal's item list and running macro total
+     * Render the in-progress meal's item list (with editable grams inputs)
      */
     renderMeal() {
-        const section = document.getElementById('search-meal-section');
         const itemsEl = document.getElementById('search-meal-items');
-        const totalEl = document.getElementById('search-meal-total');
-        if (!section || !itemsEl || !totalEl) return;
+        const emptyEl = document.getElementById('search-meal-empty');
+        if (!itemsEl) return;
 
         if (this.items.length === 0) {
-            section.style.display = 'none';
             itemsEl.innerHTML = '';
-            totalEl.innerHTML = '';
+            if (emptyEl) emptyEl.style.display = 'block';
+            this.updateTotal();
             return;
         }
 
-        section.style.display = 'block';
+        if (emptyEl) emptyEl.style.display = 'none';
 
-        itemsEl.innerHTML = this.items.map((item, index) => `
+        itemsEl.innerHTML = this.items.map((item, index) => {
+            const macros = this.computeMacros(item);
+            return `
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0;">
-                <div>
+                <div style="flex: 1;">
                     <div style="font-weight: bold;">${this.escapeHtml(item.name)}</div>
-                    <div style="font-size: 0.8rem; color: #666;">
-                        ${item.grams}g · ${Math.round(item.calories)} kcal · ${item.protein_g.toFixed(1)}g P · ${item.carbs_g.toFixed(1)}g C · ${item.fat_g.toFixed(1)}g F
+                    <div style="display: flex; align-items: center; gap: 0.4rem; margin-top: 0.25rem;">
+                        <input type="number" min="1" step="1" value="${item.grams}" data-index="${index}" class="item-grams-input"
+                            style="width: 64px; padding: 0.3rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.85rem;">
+                        <span style="font-size: 0.8rem; color: #666;">g</span>
+                        <span class="item-macros" data-index="${index}" style="font-size: 0.8rem; color: #666;">${Math.round(macros.calories)} kcal · ${macros.protein_g.toFixed(1)}g P · ${macros.carbs_g.toFixed(1)}g C · ${macros.fat_g.toFixed(1)}g F</span>
                     </div>
                 </div>
                 <button data-index="${index}" class="remove-search-item-btn" style="background: none; border: none; color: #dc3545; font-size: 1.25rem; cursor: pointer; padding: 0.25rem 0.5rem;">&times;</button>
             </div>
-        `).join('');
+        `;
+        }).join('');
+
+        itemsEl.querySelectorAll('.item-grams-input').forEach((input) => {
+            input.addEventListener('input', (e) => {
+                this.updateItemGrams(parseInt(e.target.dataset.index, 10), e.target.value);
+            });
+        });
 
         itemsEl.querySelectorAll('.remove-search-item-btn').forEach((btn) => {
             btn.addEventListener('click', () => this.removeItem(parseInt(btn.dataset.index, 10)));
         });
 
-        const totals = this.items.reduce((acc, item) => ({
-            calories: acc.calories + item.calories,
-            protein_g: acc.protein_g + item.protein_g,
-            carbs_g: acc.carbs_g + item.carbs_g,
-            fat_g: acc.fat_g + item.fat_g,
-        }), { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 });
+        this.updateTotal();
+    },
+
+    /**
+     * Recompute and display the running total for the meal being built
+     */
+    updateTotal() {
+        const totalEl = document.getElementById('search-meal-total');
+        if (!totalEl) return;
+
+        const totals = this.items.reduce((acc, item) => {
+            const macros = this.computeMacros(item);
+            return {
+                calories: acc.calories + macros.calories,
+                protein_g: acc.protein_g + macros.protein_g,
+                carbs_g: acc.carbs_g + macros.carbs_g,
+                fat_g: acc.fat_g + macros.fat_g,
+            };
+        }, { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 });
 
         totalEl.textContent = `Total: ${Math.round(totals.calories)} kcal · ${totals.protein_g.toFixed(1)}g P · ${totals.carbs_g.toFixed(1)}g C · ${totals.fat_g.toFixed(1)}g F`;
     },
@@ -2318,10 +2430,31 @@ const foodSearch = {
             return;
         }
 
+        const typeSelect = document.getElementById('meal-type-select');
+        const dateInput = document.getElementById('meal-date-input');
+
+        const payload = {
+            name: typeSelect ? (typeSelect.value || undefined) : undefined,
+            meal_date: dateInput ? (dateInput.value || undefined) : undefined,
+            items: this.items.map((item) => {
+                const macros = this.computeMacros(item);
+                return {
+                    fdc_id: item.fdc_id,
+                    name: item.name,
+                    grams: item.grams,
+                    calories: macros.calories,
+                    protein_g: macros.protein_g,
+                    carbs_g: macros.carbs_g,
+                    fat_g: macros.fat_g,
+                };
+            }),
+        };
+
         try {
-            await api.post('/meals', { items: this.items });
+            await api.post('/meals', payload);
             alert(`Meal saved! ${this.items.length} food item(s).`);
-            this.clearMeal();
+            this.closeMealBuilder();
+            this.loadSavedMeals();
         } catch (error) {
             console.error('Error saving meal:', error);
             alert('Failed to save meal');
@@ -2329,11 +2462,48 @@ const foodSearch = {
     },
 
     /**
-     * Clear the meal being built without saving
+     * Load saved meals from GET /meals and render them, most recent first
      */
-    clearMeal() {
-        this.items = [];
-        this.renderMeal();
+    async loadSavedMeals() {
+        const listEl = document.getElementById('saved-meals-list');
+        if (!listEl) return;
+
+        try {
+            const meals = await api.get('/meals');
+            this.renderSavedMeals(meals);
+        } catch (error) {
+            console.error('Error loading saved meals:', error);
+        }
+    },
+
+    /**
+     * Render the saved meals list
+     */
+    renderSavedMeals(meals) {
+        const listEl = document.getElementById('saved-meals-list');
+        if (!listEl) return;
+
+        if (!meals || meals.length === 0) {
+            listEl.className = 'empty-state';
+            listEl.innerHTML = 'No meals logged yet.';
+            return;
+        }
+
+        listEl.className = '';
+        listEl.innerHTML = meals.map((meal) => `
+            <div class="card" style="margin-bottom: 0.75rem;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                    <strong>${this.escapeHtml(meal.name)}</strong>
+                    <span style="font-size: 0.8rem; color: #666;">${this.escapeHtml(meal.meal_date)}</span>
+                </div>
+                <div style="font-size: 0.85rem; color: #666; margin-top: 0.25rem;">
+                    ${meal.items.map((item) => this.escapeHtml(item.name)).join(', ')}
+                </div>
+                <div style="font-size: 0.85rem; margin-top: 0.5rem; font-weight: bold;">
+                    ${Math.round(meal.total_calories)} kcal · ${meal.total_protein_g.toFixed(1)}g P · ${meal.total_carbs_g.toFixed(1)}g C · ${meal.total_fat_g.toFixed(1)}g F
+                </div>
+            </div>
+        `).join('');
     },
 
     /**

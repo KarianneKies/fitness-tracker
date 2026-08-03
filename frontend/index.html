@@ -578,18 +578,36 @@
                 <!-- Hidden file input for photo capture -->
                 <input type="file" id="photo-input" accept="image/*" capture="environment" style="display: none;">
 
-                <!-- Manual Food Search Section -->
-                <div class="card">
-                    <button id="add-food-btn" class="btn btn-secondary">🔍 Add Food (Search)</button>
+                <!-- Add Meal entry point -->
+                <div class="card" id="add-meal-card">
+                    <button id="add-meal-btn" class="btn btn-secondary">+ Add Meal</button>
                 </div>
 
-                <!-- Current meal being built via search -->
+                <!-- Meal builder screen: search & add foods, edit portions, running total -->
                 <div id="search-meal-section" class="card" style="display: none;">
-                    <h3>Current Meal</h3>
-                    <div id="search-meal-items" style="margin-top: 0.5rem;"></div>
+                    <h3>New Meal</h3>
+
+                    <label for="meal-type-select" style="font-size: 0.85rem; color: #666;">Meal type</label>
+                    <select id="meal-type-select" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        <option value="">Meal</option>
+                        <option value="Breakfast">Breakfast</option>
+                        <option value="Lunch">Lunch</option>
+                        <option value="Dinner">Dinner</option>
+                        <option value="Snack">Snack</option>
+                    </select>
+
+                    <label for="meal-date-input" style="font-size: 0.85rem; color: #666;">Date</label>
+                    <input type="date" id="meal-date-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+
+                    <button id="add-food-btn" class="btn">🔍 Add Food</button>
+
+                    <div id="search-meal-items" style="margin-top: 1rem;"></div>
+                    <p id="search-meal-empty" style="color: #888; font-size: 0.9rem; margin-top: 0.5rem;">No foods added yet.</p>
+
                     <div id="search-meal-total" style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #eee; font-weight: bold;"></div>
+
                     <button id="save-search-meal-btn" class="btn" style="margin-top: 1rem;">Save Meal</button>
-                    <button id="clear-search-meal-btn" class="btn btn-secondary" style="margin-top: 0.5rem;">Clear</button>
+                    <button id="clear-search-meal-btn" class="btn btn-secondary" style="margin-top: 0.5rem;">Cancel</button>
                 </div>
 
                 <!-- Analysis Results Section -->
@@ -611,9 +629,9 @@
                 </div>
                 
                 <div class="card">
-                    <h3>Today's Meals</h3>
-                    <div id="food-list" class="empty-state">
-                        No foods logged yet. Scan a barcode or add manually.
+                    <h3>Saved Meals</h3>
+                    <div id="saved-meals-list" class="empty-state">
+                        No meals logged yet.
                     </div>
                 </div>
             </div>
@@ -702,6 +720,6 @@
         </main>
     </div>
     
-    <script type="module" src="app.js?v=20260803-5"></script>
+    <script type="module" src="app.js?v=20260803-6"></script>
 </body>
 </html>

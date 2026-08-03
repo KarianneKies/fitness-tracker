@@ -16,7 +16,7 @@ Endpoints:
 - Static file mount for frontend
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
@@ -580,6 +580,7 @@ class MealFoodItemCreate(BaseModel):
 class MealCreate(BaseModel):
     """Request model for saving a meal with its food items."""
     name: Optional[str] = None
+    meal_date: Optional[str] = None  # ISO date string (YYYY-MM-DD); defaults to today
     items: List[MealFoodItemCreate]
 
 
@@ -628,7 +629,13 @@ async def create_meal(meal: MealCreate):
         raise HTTPException(status_code=400, detail="Meal must have at least one food item")
 
     with get_session() as session:
-        db_meal = Meal(name=meal.name or "Meal")
+        meal_kwargs = {"name": meal.name or "Meal"}
+        if meal.meal_date:
+            try:
+                meal_kwargs["meal_date"] = date.fromisoformat(meal.meal_date)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="meal_date must be YYYY-MM-DD")
+        db_meal = Meal(**meal_kwargs)
         session.add(db_meal)
         session.commit()
         session.refresh(db_meal)
