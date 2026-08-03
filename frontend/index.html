@@ -577,7 +577,21 @@
                 
                 <!-- Hidden file input for photo capture -->
                 <input type="file" id="photo-input" accept="image/*" capture="environment" style="display: none;">
-                
+
+                <!-- Manual Food Search Section -->
+                <div class="card">
+                    <button id="add-food-btn" class="btn btn-secondary">🔍 Add Food (Search)</button>
+                </div>
+
+                <!-- Current meal being built via search -->
+                <div id="search-meal-section" class="card" style="display: none;">
+                    <h3>Current Meal</h3>
+                    <div id="search-meal-items" style="margin-top: 0.5rem;"></div>
+                    <div id="search-meal-total" style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #eee; font-weight: bold;"></div>
+                    <button id="save-search-meal-btn" class="btn" style="margin-top: 1rem;">Save Meal</button>
+                    <button id="clear-search-meal-btn" class="btn btn-secondary" style="margin-top: 0.5rem;">Clear</button>
+                </div>
+
                 <!-- Analysis Results Section -->
                 <div id="analysis-results" class="card" style="display: none;">
                     <h3>Identified Food Items</h3>
@@ -688,6 +702,6 @@
         </main>
     </div>
     
-    <script type="module" src="app.js?v=20260803-4"></script>
+    <script type="module" src="app.js?v=20260803-5"></script>
 </body>
 </html>

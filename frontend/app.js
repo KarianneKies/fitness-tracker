@@ -879,7 +879,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof foodPhoto !== 'undefined' && foodPhoto.init) {
         foodPhoto.init();
     }
-    
+
+    // Initialize manual food search functionality
+    if (typeof foodSearch !== 'undefined' && foodSearch.init) {
+        foodSearch.init();
+    }
+
     // Start new workout button
     const startWorkoutBtn = document.getElementById('start-new-workout');
     if (startWorkoutBtn) {
@@ -2055,6 +2060,289 @@ const foodPhoto = {
             console.error('Error saving meal:', error);
             alert('Failed to save meal');
         }
+    }
+};
+
+// ========== Manual Food Search Functionality ==========
+const foodSearch = {
+    /** Items added to the meal currently being built (in memory, not yet saved) */
+    items: [],
+
+    /** Debounce timer for the search input */
+    searchDebounce: null,
+
+    /**
+     * Wire up the "Add food" button and the meal-in-progress save/clear buttons
+     */
+    init() {
+        const addBtn = document.getElementById('add-food-btn');
+        if (addBtn) {
+            addBtn.addEventListener('click', () => this.openSearchModal());
+        }
+
+        const saveBtn = document.getElementById('save-search-meal-btn');
+        if (saveBtn) {
+            saveBtn.addEventListener('click', () => this.saveMeal());
+        }
+
+        const clearBtn = document.getElementById('clear-search-meal-btn');
+        if (clearBtn) {
+            clearBtn.addEventListener('click', () => this.clearMeal());
+        }
+    },
+
+    /**
+     * Open the food search modal: a search box with live results
+     */
+    openSearchModal() {
+        const existing = document.getElementById('food-search-modal');
+        if (existing) existing.remove();
+
+        const modal = document.createElement('div');
+        modal.id = 'food-search-modal';
+        modal.style.cssText = `
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+
+        const content = document.createElement('div');
+        content.style.cssText = `
+            background: white;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 400px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+        `;
+
+        const header = document.createElement('div');
+        header.style.cssText = 'padding: 1rem; border-bottom: 1px solid #eee;';
+
+        const title = document.createElement('h3');
+        title.textContent = 'Search Foods';
+        title.style.marginBottom = '0.5rem';
+
+        const searchInput = document.createElement('input');
+        searchInput.type = 'text';
+        searchInput.placeholder = 'e.g. chicken breast';
+        searchInput.style.cssText = `
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 1rem;
+        `;
+        searchInput.addEventListener('input', (e) => {
+            clearTimeout(this.searchDebounce);
+            const term = e.target.value;
+            this.searchDebounce = setTimeout(() => this.runSearch(term), 250);
+        });
+
+        header.appendChild(title);
+        header.appendChild(searchInput);
+
+        const list = document.createElement('div');
+        list.id = 'food-search-results';
+        list.style.cssText = 'padding: 0.5rem; overflow-y: auto; flex: 1;';
+        list.innerHTML = '<p style="color: #888; text-align: center; padding: 1rem;">Start typing to search</p>';
+
+        const footer = document.createElement('div');
+        footer.style.cssText = 'padding: 1rem; border-top: 1px solid #eee;';
+
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = 'Close';
+        closeBtn.className = 'btn btn-secondary';
+        closeBtn.addEventListener('click', () => modal.remove());
+        footer.appendChild(closeBtn);
+
+        content.appendChild(header);
+        content.appendChild(list);
+        content.appendChild(footer);
+        modal.appendChild(content);
+        document.body.appendChild(modal);
+
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.remove();
+        });
+
+        searchInput.focus();
+    },
+
+    /**
+     * Query GET /foods/search and render results into the open modal
+     */
+    async runSearch(term) {
+        const list = document.getElementById('food-search-results');
+        if (!list) return;
+
+        const query = term.trim();
+        if (!query) {
+            list.innerHTML = '<p style="color: #888; text-align: center; padding: 1rem;">Start typing to search</p>';
+            return;
+        }
+
+        try {
+            const results = await api.get(`/foods/search?q=${encodeURIComponent(query)}`);
+            this.renderSearchResults(results);
+        } catch (error) {
+            console.error('Food search error:', error);
+            list.innerHTML = '<p style="color: #888; text-align: center; padding: 1rem;">Search failed</p>';
+        }
+    },
+
+    /**
+     * Render the live search results list inside the modal
+     */
+    renderSearchResults(results) {
+        const list = document.getElementById('food-search-results');
+        if (!list) return;
+
+        if (results.length === 0) {
+            list.innerHTML = '<p style="color: #888; text-align: center; padding: 1rem;">No matches</p>';
+            return;
+        }
+
+        list.innerHTML = results.map((food, index) => `
+            <div class="food-search-result" data-index="${index}" style="padding: 0.75rem; border-bottom: 1px solid #f0f0f0; cursor: pointer;">
+                <div style="font-weight: bold; color: #1a1a2e;">${this.escapeHtml(food.description)}</div>
+                <div style="font-size: 0.8rem; color: #666; margin-top: 0.25rem;">
+                    ${Math.round(food.calories_kcal)} kcal · ${food.protein_g.toFixed(1)}g P · ${food.carbs_g.toFixed(1)}g C · ${food.fat_g.toFixed(1)}g F
+                    <span style="color: #999;">(per 100g)</span>
+                </div>
+            </div>
+        `).join('');
+
+        list.querySelectorAll('.food-search-result').forEach((el) => {
+            el.addEventListener('click', () => {
+                const food = results[parseInt(el.dataset.index, 10)];
+                this.selectFood(food);
+            });
+        });
+    },
+
+    /**
+     * Handle picking a food from search results: ask for a portion in grams,
+     * scale its per-100g macros, and add it to the meal being built
+     */
+    selectFood(food) {
+        const input = window.prompt(`How many grams of "${food.description}"?`, '100');
+        if (input === null) return;
+
+        const grams = parseFloat(input);
+        if (isNaN(grams) || grams <= 0) {
+            alert('Please enter a valid number of grams.');
+            return;
+        }
+
+        const scale = grams / 100;
+        this.items.push({
+            fdc_id: food.id,
+            name: food.description,
+            grams,
+            calories: food.calories_kcal * scale,
+            protein_g: food.protein_g * scale,
+            carbs_g: food.carbs_g * scale,
+            fat_g: food.fat_g * scale,
+        });
+
+        const modal = document.getElementById('food-search-modal');
+        if (modal) modal.remove();
+
+        this.renderMeal();
+    },
+
+    /**
+     * Remove an item from the meal being built
+     */
+    removeItem(index) {
+        this.items.splice(index, 1);
+        this.renderMeal();
+    },
+
+    /**
+     * Render the in-progress meal's item list and running macro total
+     */
+    renderMeal() {
+        const section = document.getElementById('search-meal-section');
+        const itemsEl = document.getElementById('search-meal-items');
+        const totalEl = document.getElementById('search-meal-total');
+        if (!section || !itemsEl || !totalEl) return;
+
+        if (this.items.length === 0) {
+            section.style.display = 'none';
+            itemsEl.innerHTML = '';
+            totalEl.innerHTML = '';
+            return;
+        }
+
+        section.style.display = 'block';
+
+        itemsEl.innerHTML = this.items.map((item, index) => `
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0;">
+                <div>
+                    <div style="font-weight: bold;">${this.escapeHtml(item.name)}</div>
+                    <div style="font-size: 0.8rem; color: #666;">
+                        ${item.grams}g · ${Math.round(item.calories)} kcal · ${item.protein_g.toFixed(1)}g P · ${item.carbs_g.toFixed(1)}g C · ${item.fat_g.toFixed(1)}g F
+                    </div>
+                </div>
+                <button data-index="${index}" class="remove-search-item-btn" style="background: none; border: none; color: #dc3545; font-size: 1.25rem; cursor: pointer; padding: 0.25rem 0.5rem;">&times;</button>
+            </div>
+        `).join('');
+
+        itemsEl.querySelectorAll('.remove-search-item-btn').forEach((btn) => {
+            btn.addEventListener('click', () => this.removeItem(parseInt(btn.dataset.index, 10)));
+        });
+
+        const totals = this.items.reduce((acc, item) => ({
+            calories: acc.calories + item.calories,
+            protein_g: acc.protein_g + item.protein_g,
+            carbs_g: acc.carbs_g + item.carbs_g,
+            fat_g: acc.fat_g + item.fat_g,
+        }), { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 });
+
+        totalEl.textContent = `Total: ${Math.round(totals.calories)} kcal · ${totals.protein_g.toFixed(1)}g P · ${totals.carbs_g.toFixed(1)}g C · ${totals.fat_g.toFixed(1)}g F`;
+    },
+
+    /**
+     * Save the meal being built to the backend via POST /meals
+     */
+    async saveMeal() {
+        if (this.items.length === 0) {
+            alert('Add at least one food first.');
+            return;
+        }
+
+        try {
+            await api.post('/meals', { items: this.items });
+            alert(`Meal saved! ${this.items.length} food item(s).`);
+            this.clearMeal();
+        } catch (error) {
+            console.error('Error saving meal:', error);
+            alert('Failed to save meal');
+        }
+    },
+
+    /**
+     * Clear the meal being built without saving
+     */
+    clearMeal() {
+        this.items = [];
+        this.renderMeal();
+    },
+
+    /**
+     * Escape HTML to prevent XSS
+     */
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 };
 

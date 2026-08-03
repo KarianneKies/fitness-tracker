@@ -60,6 +60,22 @@ def run_data_migrations() -> None:
     finally:
         conn.close()
 
+    # Each ALTER TABLE runs in its own try/except so one already-applied
+    # migration doesn't block the others from running on a fresh column.
+    for statement in (
+        "ALTER TABLE food_items ADD COLUMN source TEXT",
+        "ALTER TABLE food_items ADD COLUMN fdc_id INTEGER",
+    ):
+        conn = engine.connect()
+        try:
+            conn.execute(text(statement))
+            conn.commit()
+        except Exception:
+            # Column already exists - expected on subsequent runs
+            conn.rollback()
+        finally:
+            conn.close()
+
 
 @contextmanager
 def get_session() -> Iterator[Session]:

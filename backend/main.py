@@ -10,6 +10,9 @@ Endpoints:
 - GET /workouts/{id}: Get one workout with all exercises and sets
 - PATCH /workouts/{id}: Update a workout (finish, add/edit exercises/sets)
 - DELETE /workouts/{id}: Delete a workout
+- GET /foods/search: Search the local USDA food reference by description
+- POST /meals: Save a meal with its food items (e.g. from manual food search)
+- GET /meals: List all meals with their food items and totals
 - Static file mount for frontend
 """
 
@@ -20,10 +23,11 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from sqlalchemy import case, func
 
 from .config import FRONTEND_DIR, PHOTOS_DIR, HAND_MEASUREMENTS
 from .database import create_db_and_tables, get_session
-from .models import Workout, Exercise, ExerciseSet
+from .models import Workout, Exercise, ExerciseSet, Food, Meal, FoodItem as FoodItemModel
 from .vision import analyze_food_photo as vision_analyze
 
 
@@ -500,6 +504,228 @@ async def analyze_food_photo(photo: UploadFile = File(...)):
         items = []
         
     return FoodPhotoResponse(items=items, photo_path=photo_path)
+
+
+# ========== Food Search Models ==========
+class FoodSearchResult(BaseModel):
+    """A USDA food reference match, with per-100g macros."""
+    id: int
+    description: str
+    calories_kcal: float
+    protein_g: float
+    carbs_g: float
+    fat_g: float
+
+
+# ========== Food Search Endpoint ==========
+@app.get("/foods/search", response_model=List[FoodSearchResult])
+async def search_foods(q: str):
+    """
+    Search the local USDA food reference by description.
+
+    Case-insensitive substring match on `description`, ordered so exact
+    matches rank first, then prefix matches, then other substring matches
+    (shorter descriptions first as a tiebreak), limited to 20 results.
+
+    Args:
+        q: Search query (e.g. "chicken")
+
+    Returns:
+        List[FoodSearchResult]: Matching foods with their per-100g macros
+    """
+    query = q.strip()
+    if not query:
+        return []
+
+    like_pattern = f"%{query}%"
+    with get_session() as session:
+        match_rank = case(
+            (func.lower(Food.description) == query.lower(), 0),
+            (Food.description.ilike(f"{query}%"), 1),
+            else_=2,
+        )
+        foods = (
+            session.query(Food)
+            .filter(Food.description.ilike(like_pattern))
+            .order_by(match_rank, func.length(Food.description))
+            .limit(20)
+            .all()
+        )
+
+        return [
+            FoodSearchResult(
+                id=food.id,
+                description=food.description,
+                calories_kcal=food.calories_kcal,
+                protein_g=food.protein_g,
+                carbs_g=food.carbs_g,
+                fat_g=food.fat_g,
+            )
+            for food in foods
+        ]
+
+
+# ========== Meal Models ==========
+class MealFoodItemCreate(BaseModel):
+    """A single food item to add to a meal, with macros already scaled to the eaten portion."""
+    fdc_id: Optional[int] = None
+    name: str
+    grams: float
+    calories: float
+    protein_g: float
+    carbs_g: float
+    fat_g: float
+
+
+class MealCreate(BaseModel):
+    """Request model for saving a meal with its food items."""
+    name: Optional[str] = None
+    items: List[MealFoodItemCreate]
+
+
+class MealFoodItemResponse(BaseModel):
+    """Response model for a saved food item."""
+    id: int
+    fdc_id: Optional[int]
+    name: str
+    grams: float
+    calories: Optional[float]
+    protein_g: Optional[float]
+    carbs_g: Optional[float]
+    fat_g: Optional[float]
+    source: Optional[str]
+
+
+class MealResponse(BaseModel):
+    """Response model for a saved meal, with its items and totals."""
+    id: int
+    name: str
+    meal_date: str
+    items: List[MealFoodItemResponse]
+    total_calories: float
+    total_protein_g: float
+    total_carbs_g: float
+    total_fat_g: float
+
+
+# ========== Meal Endpoints ==========
+@app.post("/meals", response_model=MealResponse)
+async def create_meal(meal: MealCreate):
+    """
+    Save a meal with its food items (e.g. from manual food search).
+
+    Each item is stored as a FoodItem with source="search", its grams in
+    `quantity` (unit="g"), and the macros the caller already computed
+    (per-100g macros x grams / 100).
+
+    Args:
+        meal: MealCreate with an optional name and a list of food items
+
+    Returns:
+        MealResponse: The saved meal with its items and totals
+    """
+    if not meal.items:
+        raise HTTPException(status_code=400, detail="Meal must have at least one food item")
+
+    with get_session() as session:
+        db_meal = Meal(name=meal.name or "Meal")
+        session.add(db_meal)
+        session.commit()
+        session.refresh(db_meal)
+
+        items_response = []
+        total_calories = total_protein_g = total_carbs_g = total_fat_g = 0.0
+        for item in meal.items:
+            db_item = FoodItemModel(
+                meal_id=db_meal.id,
+                name=item.name,
+                quantity=item.grams,
+                unit="g",
+                calories=item.calories,
+                protein_g=item.protein_g,
+                carbs_g=item.carbs_g,
+                fat_g=item.fat_g,
+                source="search",
+                fdc_id=item.fdc_id,
+            )
+            session.add(db_item)
+            session.commit()
+            session.refresh(db_item)
+
+            items_response.append(MealFoodItemResponse(
+                id=db_item.id,
+                fdc_id=db_item.fdc_id,
+                name=db_item.name,
+                grams=db_item.quantity,
+                calories=db_item.calories,
+                protein_g=db_item.protein_g,
+                carbs_g=db_item.carbs_g,
+                fat_g=db_item.fat_g,
+                source=db_item.source,
+            ))
+            total_calories += item.calories
+            total_protein_g += item.protein_g
+            total_carbs_g += item.carbs_g
+            total_fat_g += item.fat_g
+
+        return MealResponse(
+            id=db_meal.id,
+            name=db_meal.name,
+            meal_date=db_meal.meal_date.isoformat(),
+            items=items_response,
+            total_calories=total_calories,
+            total_protein_g=total_protein_g,
+            total_carbs_g=total_carbs_g,
+            total_fat_g=total_fat_g,
+        )
+
+
+@app.get("/meals", response_model=List[MealResponse])
+async def get_meals():
+    """
+    Get all meals, most recent first, with their food items and totals.
+
+    Returns:
+        List[MealResponse]: All meals with items and computed totals
+    """
+    with get_session() as session:
+        meals = session.query(Meal).order_by(Meal.created_at.desc()).all()
+
+        result = []
+        for db_meal in meals:
+            items = session.query(FoodItemModel).filter(
+                FoodItemModel.meal_id == db_meal.id
+            ).all()
+
+            items_response = [
+                MealFoodItemResponse(
+                    id=item.id,
+                    fdc_id=item.fdc_id,
+                    name=item.name,
+                    grams=item.quantity,
+                    calories=item.calories,
+                    protein_g=item.protein_g,
+                    carbs_g=item.carbs_g,
+                    fat_g=item.fat_g,
+                    source=item.source,
+                )
+                for item in items
+            ]
+
+            result.append(MealResponse(
+                id=db_meal.id,
+                name=db_meal.name,
+                meal_date=db_meal.meal_date.isoformat(),
+                items=items_response,
+                total_calories=sum(i.calories or 0 for i in items),
+                total_protein_g=sum(i.protein_g or 0 for i in items),
+                total_carbs_g=sum(i.carbs_g or 0 for i in items),
+                total_fat_g=sum(i.fat_g or 0 for i in items),
+            ))
+
+        return result
+
+
 async def delete_workout(workout_id: int):
     """
     Delete a workout and all its exercises/sets.

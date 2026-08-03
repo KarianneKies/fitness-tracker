@@ -12,12 +12,31 @@ This module defines all database models:
 - WeeklyCheckin: Weekly progress and reflection entries
 - Goal: User goals (weight, strength, etc.)
 - DailyEvaluation: Daily habit and mood evaluation
+- Food: USDA FoodData Central food reference (per-100g macros)
 """
 
 from datetime import date, datetime
 from typing import List, Optional
 
 from sqlmodel import Field, Relationship, SQLModel
+
+
+class Food(SQLModel, table=True):
+    """
+    Model for a USDA FoodData Central food reference.
+
+    One row per food, holding per-100g macros used to look up nutrition
+    when logging a meal from a photo.
+    """
+    __tablename__ = "foods"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fdc_id: int = Field(..., unique=True, index=True, description="USDA FoodData Central ID")
+    description: str = Field(..., index=True, description="Food name/description")
+    calories_kcal: float = Field(..., description="Energy in kcal per 100g")
+    protein_g: float = Field(..., description="Protein in grams per 100g")
+    carbs_g: float = Field(..., description="Carbohydrate in grams per 100g")
+    fat_g: float = Field(..., description="Total fat in grams per 100g")
 
 
 class Workout(SQLModel, table=True):
@@ -109,13 +128,15 @@ class FoodItem(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     meal_id: int = Field(..., foreign_key="meals.id", description="Reference to the parent meal")
     name: str = Field(..., description="Food name (e.g., 'Chicken Breast')")
-    quantity: float = Field(..., description="Quantity consumed")
+    quantity: float = Field(..., description="Quantity consumed (grams, for source='search')")
     unit: str = Field(default="g", description="Unit of measurement (e.g., 'g', 'cup', 'oz')")
-    calories: Optional[int] = Field(default=None, description="Calories in this food item")
+    calories: Optional[float] = Field(default=None, description="Calories in this food item")
     protein_g: Optional[float] = Field(default=None, description="Protein in grams")
     carbs_g: Optional[float] = Field(default=None, description="Carbohydrates in grams")
     fat_g: Optional[float] = Field(default=None, description="Fat in grams")
     barcode: Optional[str] = Field(default=None, description="Barcode if scanned from product")
+    source: Optional[str] = Field(default=None, description="Where this item came from: 'search', 'photo', or 'barcode'")
+    fdc_id: Optional[int] = Field(default=None, description="USDA FoodData Central ID, for source='search' or 'photo'")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
 
 
