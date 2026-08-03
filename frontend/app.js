@@ -875,6 +875,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize tabs
     initTabs();
     
+    // Initialize food photo analysis functionality
+    if (typeof foodPhoto !== 'undefined' && foodPhoto.init) {
+        foodPhoto.init();
+    }
+    
     // Start new workout button
     const startWorkoutBtn = document.getElementById('start-new-workout');
     if (startWorkoutBtn) {
@@ -1624,7 +1629,436 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 });
 
-// Service Worker registration (if supported)
+// ========== Food Photo Analysis Functionality ==========
+const foodPhoto = {
+    /** Current photo data being processed */
+    currentPhoto: null,
+    
+    /** Current analysis results */
+    results: [],
+    
+    /**
+     * Initialize food photo capture functionality
+     */
+    init() {
+        // Capture button
+        const captureBtn = document.getElementById('capture-photo-btn');
+        if (captureBtn) {
+            captureBtn.addEventListener('click', () => this.startCamera());
+        }
+        
+        // Photo input change handler
+        const photoInput = document.getElementById('photo-input');
+        if (photoInput) {
+            photoInput.addEventListener('change', async (e) => await this.handleFileSelect(e));
+        }
+        
+        // Clear results button
+        const clearBtn = document.getElementById('clear-results-btn');
+        if (clearBtn) {
+            clearBtn.addEventListener('click', () => this.clearResults());
+        }
+        
+        // Save meal button
+        const saveBtn = document.getElementById('save-meal-btn');
+        if (saveBtn) {
+            saveBtn.addEventListener('click', () => this.saveMeal());
+        }
+        
+        // Stop camera when switching away from Food tab
+        document.addEventListener('tabSwitch', () => this.stopCamera());
+    },
+    
+    /**
+     * Start camera for real-time capture
+     */
+    async startCamera() {
+        try {
+            // Stop any existing camera stream
+            this.stopCamera();
+            
+            // Request camera access
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'environment' } // Use back camera on mobile
+            });
+            
+            this.cameraStream = stream;
+            
+            // Create video element for preview (hidden)
+            const video = document.createElement('video');
+            video.srcObject = stream;
+            video.play();
+            
+            // Create a canvas to capture the image
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            
+            // Show capture UI overlay
+            this.showCaptureOverlay(canvas, video);
+            
+        } catch (error) {
+            console.error('Error accessing camera:', error);
+            alert('Could not access camera. Please allow camera permissions and try again.');
+        }
+    },
+    
+    /**
+     * Stop the camera
+     */
+    stopCamera() {
+        if (this.cameraStream) {
+            this.cameraStream.getTracks().forEach(track => track.stop());
+            this.cameraStream = null;
+        }
+        
+        // Remove capture overlay if it exists
+        const overlay = document.getElementById('camera-overlay');
+        if (overlay) {
+            overlay.remove();
+        }
+    },
+    
+    /**
+     * Show capture overlay with camera preview
+     */
+    showCaptureOverlay(canvas, video) {
+        // Remove existing overlay if present
+        const existing = document.getElementById('camera-overlay');
+        if (existing) existing.remove();
+        
+        // Create overlay container
+        const overlay = document.createElement('div');
+        overlay.id = 'camera-overlay';
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.95);
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        `;
+        
+        // Video preview container
+        const videoContainer = document.createElement('div');
+        videoContainer.style.cssText = 'width: 100%; max-width: 600px; margin-bottom: 1rem;';
+        
+        // Create visible video element
+        const previewVideo = document.createElement('video');
+        previewVideo.autoplay = true;
+        previewVideo.playsInline = true;
+        previewVideo.srcObject = this.cameraStream;
+        previewVideo.style.cssText = 'width: 100%; border-radius: 12px; transform: scaleX(-1);';
+        
+        // For Safari compatibility
+        if (previewVideo.play) {
+            previewVideo.play().catch(e => console.log('Preview play error:', e));
+        }
+        
+        videoContainer.appendChild(previewVideo);
+        
+        // Capture button container
+        const captureContainer = document.createElement('div');
+        captureContainer.style.cssText = 'display: flex; gap: 1rem; margin-top: 1.5rem;';
+        
+        // Capture button (circular)
+        const captureBtn = document.createElement('button');
+        captureBtn.style.cssText = `
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            border: 4px solid white;
+            background: transparent;
+            cursor: pointer;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        
+        const captureInner = document.createElement('div');
+        captureInner.style.cssText = 'width: 62px; height: 62px; border-radius: 50%; background: white;';
+        captureBtn.appendChild(captureInner);
+        
+        // Cancel button
+        const cancelBtn = document.createElement('button');
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.className = 'btn btn-secondary';
+        cancelBtn.style.cssText = 'width: auto; padding: 0.5rem 1.5rem;';
+        
+        // Take photo button
+        const takePhotoBtn = document.createElement('button');
+        takePhotoBtn.textContent = '✓ Take Photo';
+        takePhotoBtn.className = 'btn';
+        takePhotoBtn.style.cssText = 'width: auto; padding: 0.5rem 1.5rem;';
+        
+        // Close button (top right)
+        const closeBtn = document.createElement('button');
+        closeBtn.innerHTML = '×';
+        closeBtn.style.cssText = `
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: none;
+            border: none;
+            color: white;
+            font-size: 2rem;
+            cursor: pointer;
+        `;
+        
+        // Event handlers
+        closeBtn.onclick = () => this.stopCamera();
+        cancelBtn.onclick = () => this.stopCamera();
+        
+        takePhotoBtn.onclick = async () => {
+            try {
+                // Draw current video frame to canvas
+                const ctx = canvas.getContext('2d');
+                
+                // Flip the image horizontally (mirror effect)
+                ctx.translate(canvas.width, 0);
+                ctx.scale(-1, 1);
+                ctx.drawImage(previewVideo, 0, 0, canvas.width, canvas.height);
+                
+                // Convert to blob
+                const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+                const file = new File([blob], `camera_capture_${Date.now()}.jpg`, {
+                    type: 'image/jpeg'
+                });
+                
+                // Stop camera and process the photo
+                this.stopCamera();
+                await this.handlePhotoFile(file);
+                
+            } catch (error) {
+                console.error('Error capturing photo:', error);
+                alert('Failed to capture photo');
+            }
+        };
+        
+        // Build overlay
+        closeBtn.onclick = () => this.stopCamera();
+        cancelBtn.onclick = () => this.stopCamera();
+        
+        captureContainer.appendChild(cancelBtn);
+        captureContainer.appendChild(takePhotoBtn);
+        
+        overlay.appendChild(closeBtn);
+        overlay.appendChild(videoContainer);
+        overlay.appendChild(captureContainer);
+        document.body.appendChild(overlay);
+    },
+    
+    /**
+     * Handle photo file (from capture or file picker)
+     */
+    async handlePhotoFile(file) {
+        if (!file || !file.type.startsWith('image/')) {
+            return;
+        }
+        
+        this.currentPhoto = file;
+        
+        // Show loading indicator
+        const loadingIndicator = document.getElementById('loading-indicator');
+        if (loadingIndicator) {
+            loadingIndicator.style.display = 'block';
+        }
+        
+        // Hide results list while analyzing
+        const foodItemsList = document.getElementById('food-items-list');
+        if (foodItemsList) {
+            foodItemsList.innerHTML = '';
+        }
+        
+        // Hide analysis results until we get the data
+        const analysisResults = document.getElementById('analysis-results');
+        if (analysisResults) {
+            analysisResults.style.display = 'none';
+        }
+        
+        try {
+            // Analyze photo with backend
+            const result = await this.analyzePhoto(file);
+            
+            if (result && result.items && result.items.length > 0) {
+                this.results = result.items;
+                
+                // Display results
+                this.displayResults(result);
+            } else {
+                alert('No food items were identified in the photo. Please try again with a clearer image.');
+            }
+        } catch (error) {
+            console.error('Error analyzing photo:', error);
+            alert('Failed to analyze photo. Make sure LM Studio is running on http://localhost:3142');
+        } finally {
+            // Hide loading indicator
+            if (loadingIndicator) {
+                loadingIndicator.style.display = 'none';
+            }
+        }
+    },
+    
+    /**
+     * Handle selected file (from file picker)
+     */
+    async handleFileSelect(event) {
+        const file = event.target.files[0];
+        if (!file || !file.type.startsWith('image/')) {
+            return;
+        }
+        
+        await this.handlePhotoFile(file);
+        
+        // Reset the file input
+        event.target.value = '';
+    },
+    
+    /**
+     * Analyze photo using backend API
+     */
+    async analyzePhoto(file) {
+        const formData = new FormData();
+        formData.append('photo', file);
+        
+        try {
+            // Build URL using window.location.origin (backend API)
+            const response = await fetch(`${window.location.origin}/meals/photo`, {
+                method: 'POST',
+                body: formData
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error('Photo analysis error:', error);
+            
+            // Check if it's a network error (LM Studio not available)
+            if (!navigator.onLine) {
+                throw new Error('No internet connection. LM Studio may not be accessible.');
+            }
+            
+            // Try to get error details from response
+            try {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || errorData.message || 'Failed to analyze photo');
+            } catch (e) {
+                // If response is not JSON, use the original error
+                throw error;
+            }
+        }
+    },
+    
+    /**
+     * Display analysis results
+     */
+    displayResults(result) {
+        const foodItemsList = document.getElementById('food-items-list');
+        if (!foodItemsList) return;
+        
+        // Show analysis results section
+        const analysisResults = document.getElementById('analysis-results');
+        if (analysisResults) {
+            analysisResults.style.display = 'block';
+        }
+        
+        // Render each food item
+        const itemsHtml = result.items.map((item, index) => `
+            <div class="card" style="margin-bottom: 0.75rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <strong>${this.escapeHtml(item.name)}</strong>
+                    <span style="color: #666;">${item.estimated_portion_g} g</span>
+                </div>
+            </div>
+        `).join('');
+        
+        foodItemsList.innerHTML = itemsHtml;
+    },
+    
+    /**
+     * Escape HTML to prevent XSS
+     */
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    },
+    
+    /**
+     * Clear results and reset UI
+     */
+    clearResults() {
+        this.currentPhoto = null;
+        this.results = [];
+        
+        const analysisResults = document.getElementById('analysis-results');
+        if (analysisResults) {
+            analysisResults.style.display = 'none';
+        }
+        
+        const foodItemsList = document.getElementById('food-items-list');
+        if (foodItemsList) {
+            foodItemsList.innerHTML = '';
+        }
+        
+        const loadingIndicator = document.getElementById('loading-indicator');
+        if (loadingIndicator) {
+            loadingIndicator.style.display = 'none';
+        }
+        
+        // Reset photo input
+        const photoInput = document.getElementById('photo-input');
+        if (photoInput) {
+            photoInput.value = '';
+        }
+    },
+    
+    /**
+     * Save meal to database
+     */
+    async saveMeal() {
+        if (!this.results || this.results.length === 0) {
+            alert('No food items to save.');
+            return;
+        }
+        
+        try {
+            const formData = new FormData();
+            
+            // Add each food item as JSON
+            formData.append('items', JSON.stringify(this.results));
+            
+            if (this.currentPhoto) {
+                formData.append('photo', this.currentPhoto);
+            }
+            
+            // For now, we just confirm the items were analyzed
+            // The full meal saving would involve creating a Meal record in the database
+            
+            alert(`Meal saved! ${this.results.length} food item(s) identified and estimated.` + 
+                  '\n\nFull meal saving functionality would be implemented in the next step.');
+            
+            // Clear results after save
+            this.clearResults();
+        } catch (error) {
+            console.error('Error saving meal:', error);
+            alert('Failed to save meal');
+        }
+    }
+};
+
+// ========== Service Worker registration (if supported)
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js')

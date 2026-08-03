@@ -16,14 +16,15 @@ Endpoints:
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .config import FRONTEND_DIR
+from .config import FRONTEND_DIR, PHOTOS_DIR, HAND_MEASUREMENTS
 from .database import create_db_and_tables, get_session
 from .models import Workout, Exercise, ExerciseSet
+from .vision import analyze_food_photo as vision_analyze
 
 
 # Create FastAPI app
@@ -447,7 +448,58 @@ async def update_workout(workout_id: int, workout_update: WorkoutUpdate):
         )
 
 
-@app.delete("/workouts/{workout_id}", response_model=dict)
+# ========== Photo Analysis Models ==========
+class FoodItem(BaseModel):
+    """A food item identified in a photo."""
+    name: str
+    estimated_portion_g: int
+
+
+class FoodPhotoResponse(BaseModel):
+    """Response model for food photo analysis."""
+    items: List[FoodItem]
+    photo_path: Optional[str] = None
+
+
+@app.post("/meals/photo", response_model=FoodPhotoResponse)
+async def analyze_food_photo(photo: UploadFile = File(...)):
+    """
+    Analyze a food photo using the vision model.
+    
+    This endpoint accepts an image upload, saves it to disk,
+    sends it to LM Studio for visual analysis, and returns the recognized
+    food items with their estimated portion sizes.
+    
+    Args:
+        photo: The uploaded image file
+        
+    Returns:
+        FoodPhotoResponse: List of food items with estimated portions in grams
+    """
+    import os
+    import uuid
+    
+    # Ensure photos directory exists
+    os.makedirs(PHOTOS_DIR, exist_ok=True)
+    
+    # Generate a unique filename for the photo
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"meal_{timestamp}_{uuid.uuid4().hex[:8]}.jpg"
+    photo_path = os.path.join(PHOTOS_DIR, filename)
+    
+    # Save the uploaded file
+    with open(photo_path, "wb") as f:
+        content = await photo.read()
+        f.write(content)
+    
+    # Analyze the food photo using LM Studio
+    items = await vision_analyze(photo_path, HAND_MEASUREMENTS)
+    
+    # Return the analysis results
+    if items is None:
+        items = []
+        
+    return FoodPhotoResponse(items=items, photo_path=photo_path)
 async def delete_workout(workout_id: int):
     """
     Delete a workout and all its exercises/sets.

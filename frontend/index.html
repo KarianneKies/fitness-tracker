@@ -566,11 +566,34 @@
             <!-- Food Tab -->
             <div id="food" class="tab-content">
                 <h2 style="margin-bottom: 1rem;">Food Log</h2>
+                
+                <!-- Photo Capture Section -->
                 <div class="card">
-                    <button id="scan-button" class="btn">📷 Scan Barcode</button>
+                    <button id="capture-photo-btn" class="btn">📷 Capture Food Photo</button>
                     <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #666;">
-                        Use camera to scan food barcodes for automatic nutrition lookup
+                        Take a photo of your meal to identify food items and estimate portions
                     </p>
+                </div>
+                
+                <!-- Hidden file input for photo capture -->
+                <input type="file" id="photo-input" accept="image/*" capture="environment" style="display: none;">
+                
+                <!-- Analysis Results Section -->
+                <div id="analysis-results" class="card" style="display: none;">
+                    <h3>Identified Food Items</h3>
+                    
+                    <!-- Loading state -->
+                    <div id="loading-indicator" style="display: none; text-align: center; padding: 1rem;">
+                        <p style="color: #666;">Analyzing photo with AI...</p>
+                    </div>
+                    
+                    <!-- Results list -->
+                    <div id="food-items-list" style="margin-top: 1rem;">
+                        <!-- Items will be rendered here -->
+                    </div>
+                    
+                    <button id="save-meal-btn" class="btn" style="margin-top: 1rem;">Save Meal</button>
+                    <button id="clear-results-btn" class="btn btn-secondary" style="margin-top: 0.5rem;">Start Over</button>
                 </div>
                 
                 <div class="card">
