@@ -95,8 +95,9 @@ class Exercise(SQLModel, table=True):
     workout_id: int = Field(..., foreign_key="workouts.id", description="Reference to the parent workout")
     name: str = Field(..., description="Exercise name (e.g., 'Bench Press')")
     order: int = Field(..., description="Position/order of this exercise within the workout")
+    muscle_group: Optional[str] = Field(default=None, description="Primary muscle group worked (e.g., 'Chest'), guessed from the exercise name")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
-    
+
     # Relationship back to workout
     workout: Optional["Workout"] = Relationship(back_populates="exercises")
 

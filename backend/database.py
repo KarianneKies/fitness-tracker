@@ -65,6 +65,7 @@ def run_data_migrations() -> None:
     for statement in (
         "ALTER TABLE food_items ADD COLUMN source TEXT",
         "ALTER TABLE food_items ADD COLUMN fdc_id INTEGER",
+        "ALTER TABLE exercises ADD COLUMN muscle_group TEXT",
     ):
         conn = engine.connect()
         try:

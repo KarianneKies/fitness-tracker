@@ -46,6 +46,7 @@ from .database import create_db_and_tables, get_session
 from .models import Workout, Exercise, ExerciseSet, Food, UserFood, Meal, FoodItem as FoodItemModel, WeeklyCheckin, Goal
 from .vision import analyze_food_photo as vision_analyze
 from .vision import analyze_nutrition_label as vision_analyze_label
+from .muscle_groups import guess_muscle_group
 
 
 # Create FastAPI app
@@ -156,6 +157,7 @@ class ExerciseResponse(BaseModel):
     workout_id: int
     name: str
     order: int
+    muscle_group: Optional[str]
     sets: List[ExerciseSetResponse]
 
 
@@ -256,6 +258,7 @@ async def get_workouts():
                     workout_id=exercise.workout_id,
                     name=exercise.name,
                     order=exercise.order,
+                    muscle_group=exercise.muscle_group,
                     sets=[
                         ExerciseSetResponse(
                             id=s.id,
@@ -315,6 +318,7 @@ async def get_workout(workout_id: int):
                 workout_id=exercise.workout_id,
                 name=exercise.name,
                 order=exercise.order,
+                muscle_group=exercise.muscle_group,
                 sets=[
                     ExerciseSetResponse(
                         id=s.id,
@@ -400,13 +404,15 @@ async def update_workout(workout_id: int, workout_update: WorkoutUpdate):
                     db_exercise = Exercise(
                         workout_id=workout_id,
                         name=exercise_data.name,
-                        order=exercise_data.order
+                        order=exercise_data.order,
+                        muscle_group=guess_muscle_group(exercise_data.name)
                     )
                     session.add(db_exercise)
                 else:
                     # Update existing exercise's fields
                     db_exercise.name = exercise_data.name
                     db_exercise.order = exercise_data.order
+                    db_exercise.muscle_group = guess_muscle_group(exercise_data.name)
                 session.commit()
                 session.refresh(db_exercise)
 
@@ -459,6 +465,7 @@ async def update_workout(workout_id: int, workout_update: WorkoutUpdate):
                 workout_id=exercise.workout_id,
                 name=exercise.name,
                 order=exercise.order,
+                muscle_group=exercise.muscle_group,
                 sets=[
                     ExerciseSetResponse(
                         id=s.id,
