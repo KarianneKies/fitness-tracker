@@ -616,6 +616,119 @@
             font-size: 0.8rem;
             color: #666;
         }
+
+        /* Check-in History Detail View Styles (mirrors meal/workout) */
+        .checkin-detail-panel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            z-index: 1200;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .checkin-detail-header {
+            padding: 1rem;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .checkin-detail-title {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #1a1a2e;
+        }
+
+        .checkin-detail-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #666;
+        }
+
+        .checkin-detail-edit-btn {
+            background: #e94560;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+
+        .checkin-detail-content {
+            flex: 1;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+
+        .checkin-detail-date {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 1rem;
+        }
+
+        .checkin-detail-photo {
+            width: 100%;
+            border-radius: 12px;
+            margin-bottom: 1rem;
+        }
+
+        .checkin-detail-stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem 1.5rem;
+            padding: 0.75rem 1rem;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+
+        .checkin-detail-stat-label {
+            font-size: 0.8rem;
+            color: #666;
+        }
+
+        .checkin-detail-stat-value {
+            font-weight: bold;
+            color: #1a1a2e;
+        }
+
+        .checkin-detail-notes {
+            font-size: 0.9rem;
+            color: #333;
+            white-space: pre-wrap;
+        }
+
+        /* Check-in Cards */
+        .checkin-card-photo {
+            width: 100%;
+            max-height: 200px;
+            object-fit: cover;
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+        }
+
+        .checkin-delta {
+            font-size: 0.8rem;
+        }
+
+        .checkin-delta-down {
+            color: #2e7d32;
+        }
+
+        .checkin-delta-up {
+            color: #dc3545;
+        }
     </style>
 </head>
 <body>
@@ -629,7 +742,6 @@
             <div class="tab" data-tab="food">Food</div>
             <div class="tab" data-tab="workout">Workout</div>
             <div class="tab" data-tab="checkin">Check-in</div>
-            <div class="tab" data-tab="goal">Goal</div>
         </nav>
         
         <main class="content-area">
@@ -644,35 +756,83 @@
                     </div>
                     <div class="metric">
                         <span>Goal:</span>
-                        <span id="calories-goal">2000</span>
+                        <span id="calories-goal">Not set</span>
                     </div>
                 </div>
-                
+
                 <div class="card">
                     <h3>Macros</h3>
                     <div class="metric">
                         <span>Protein:</span>
-                        <span id="protein">0g / 150g</span>
+                        <span id="protein-progress">0g</span>
                     </div>
                     <div class="metric">
                         <span>Carbs:</span>
-                        <span id="carbs">0g / 250g</span>
+                        <span id="carbs-progress">0g</span>
                     </div>
                     <div class="metric">
                         <span>Fat:</span>
-                        <span id="fat">0g / 65g</span>
+                        <span id="fat-progress">0g</span>
                     </div>
                 </div>
-                
+
                 <div class="card">
                     <h3>Exercise</h3>
                     <div class="metric">
-                        <span>Duration:</span>
+                        <span>Duration today:</span>
                         <span id="exercise-duration">0 min</span>
                     </div>
+                    <div class="metric">
+                        <span>This week:</span>
+                        <span id="training-days-progress">0 workouts</span>
+                    </div>
+                </div>
+
+                <!-- Goal summary + edit entry point -->
+                <div class="card" id="goal-display-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                        <h3 style="margin-bottom: 0;">Your Goal</h3>
+                        <button id="edit-goal-btn" class="btn btn-secondary" style="width: auto; padding: 0.4rem 0.9rem; font-size: 0.85rem;">Edit</button>
+                    </div>
+                    <div id="goal-summary" class="empty-state">No goal set yet.</div>
+                </div>
+
+                <!-- Goal form (hidden until "Edit" or first-time setup) -->
+                <div class="card" id="goal-form-section" style="display: none;">
+                    <h3>Set Your Goal</h3>
+
+                    <label for="goal-calories-input" style="font-size: 0.85rem; color: #666;">Daily calorie target (kcal)</label>
+                    <input type="number" step="any" id="goal-calories-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+
+                    <div style="display: flex; gap: 0.5rem;">
+                        <div style="flex: 1;">
+                            <label for="goal-protein-input" style="font-size: 0.85rem; color: #666;">Protein (g)</label>
+                            <input type="number" step="any" id="goal-protein-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label for="goal-carbs-input" style="font-size: 0.85rem; color: #666;">Carbs (g)</label>
+                            <input type="number" step="any" id="goal-carbs-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label for="goal-fat-input" style="font-size: 0.85rem; color: #666;">Fat (g)</label>
+                            <input type="number" step="any" id="goal-fat-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                    </div>
+
+                    <label for="goal-training-days-input" style="font-size: 0.85rem; color: #666;">Training days per week (optional)</label>
+                    <input type="number" step="1" min="0" max="7" id="goal-training-days-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+
+                    <label for="goal-target-weight-input" style="font-size: 0.85rem; color: #666;">Target weight (kg, optional)</label>
+                    <input type="number" step="any" id="goal-target-weight-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+
+                    <label for="goal-target-date-input" style="font-size: 0.85rem; color: #666;">Target date (optional)</label>
+                    <input type="date" id="goal-target-date-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+
+                    <button id="save-goal-btn" class="btn">Save Goal</button>
+                    <button id="cancel-goal-btn" class="btn btn-secondary" style="margin-top: 0.5rem;">Cancel</button>
                 </div>
             </div>
-            
+
             <!-- Food Tab -->
             <div id="food" class="tab-content">
                 <h2 style="margin-bottom: 1rem;">Food Log</h2>
@@ -781,40 +941,71 @@
             <!-- Check-in Tab -->
             <div id="checkin" class="tab-content">
                 <h2 style="margin-bottom: 1rem;">Weekly Check-in</h2>
-                
+
+                <!-- Add Check-in entry point -->
+                <div class="card" id="add-checkin-card">
+                    <button id="add-checkin-btn" class="btn">+ Add Check-in</button>
+                </div>
+
+                <!-- Check-in form: add or edit -->
+                <div id="checkin-form-section" class="card" style="display: none;">
+                    <h3 id="checkin-form-title">New Check-in</h3>
+
+                    <label for="checkin-date-input" style="font-size: 0.85rem; color: #666;">Date</label>
+                    <input type="date" id="checkin-date-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+
+                    <label for="checkin-weight-input" style="font-size: 0.85rem; color: #666;">Weight (kg)</label>
+                    <input type="number" step="any" id="checkin-weight-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+
+                    <div style="display: flex; gap: 0.5rem;">
+                        <div style="flex: 1;">
+                            <label for="checkin-waist-input" style="font-size: 0.85rem; color: #666;">Waist (cm)</label>
+                            <input type="number" step="any" id="checkin-waist-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label for="checkin-chest-input" style="font-size: 0.85rem; color: #666;">Chest (cm)</label>
+                            <input type="number" step="any" id="checkin-chest-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 0.5rem;">
+                        <div style="flex: 1;">
+                            <label for="checkin-hips-input" style="font-size: 0.85rem; color: #666;">Hips (cm)</label>
+                            <input type="number" step="any" id="checkin-hips-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label for="checkin-arm-input" style="font-size: 0.85rem; color: #666;">Arm (cm)</label>
+                            <input type="number" step="any" id="checkin-arm-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label for="checkin-thigh-input" style="font-size: 0.85rem; color: #666;">Thigh (cm)</label>
+                            <input type="number" step="any" id="checkin-thigh-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                    </div>
+
+                    <label for="checkin-photo-input" style="font-size: 0.85rem; color: #666;">Progress photo (optional)</label>
+                    <input type="file" id="checkin-photo-input" accept="image/*" capture="environment" style="margin-bottom: 0.5rem;">
+                    <div id="checkin-photo-preview" style="display: none; margin-bottom: 0.75rem;"></div>
+
+                    <label for="checkin-notes-input" style="font-size: 0.85rem; color: #666;">Notes</label>
+                    <textarea id="checkin-notes-input" rows="3" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem; resize: vertical;" placeholder="How did this week go?"></textarea>
+
+                    <button id="save-checkin-btn" class="btn">Save Check-in</button>
+                    <button id="cancel-checkin-btn" class="btn btn-secondary" style="margin-top: 0.5rem;">Cancel</button>
+                </div>
+
+                <!-- Check-in history -->
                 <div class="card">
-                    <h3>This Week's Stats</h3>
-                    <div id="checkin-stats" class="empty-state">
-                        Data will appear as you track your progress
+                    <h3>History</h3>
+                    <div id="checkin-list" class="empty-state">
+                        No check-ins logged yet.
                     </div>
                 </div>
-                
-                <div class="card">
-                    <h3>Reflection</h3>
-                    <p style="font-size: 0.9rem; color: #666;">
-                        How did your week go? What worked well? What could be improved?
-                    </p>
-                </div>
-                
-                <button id="save-checkin" class="btn">Save Check-in</button>
             </div>
             
-            <!-- Goal Tab -->
-            <div id="goal" class="tab-content">
-                <h2 style="margin-bottom: 1rem;">Goals</h2>
-                
-                <div class="card">
-                    <h3>Your Goals</h3>
-                    <div id="goal-list" class="empty-state">
-                        Set goals to track your progress
-                    </div>
-                </div>
-                
-                <button id="add-goal" class="btn">+ Add New Goal</button>
-            </div>
         </main>
     </div>
     
-    <script type="module" src="app.js?v=20260804-6"></script>
+    <script type="module" src="app.js?v=20260804-9"></script>
 </body>
 </html>

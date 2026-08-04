@@ -163,37 +163,49 @@ class FoodItem(SQLModel, table=True):
 class WeeklyCheckin(SQLModel, table=True):
     """
     Model for weekly progress check-ins.
-    
-    Records weekly weight, measurements, and reflections.
+
+    Records a progress photo, weight, and body circumference measurements,
+    for tracking physical change over time (SPEC.md section 5).
     """
     __tablename__ = "weekly_checkins"
-    
+
     id: Optional[int] = Field(default=None, primary_key=True)
-    checkin_date: date = Field(default_factory=lambda: date.today(), description="Week reference date (typically Sunday)")
+    checkin_date: date = Field(default_factory=lambda: date.today(), description="Date of the check-in")
+    photo_path: Optional[str] = Field(default=None, description="Path to the progress photo, if taken")
     weight_kg: Optional[float] = Field(default=None, description="Weight in kilograms")
-    body_fat_pct: Optional[float] = Field(default=None, description="Body fat percentage")
+    waist_cm: Optional[float] = Field(default=None, description="Waist circumference in cm")
+    chest_cm: Optional[float] = Field(default=None, description="Chest circumference in cm")
+    hips_cm: Optional[float] = Field(default=None, description="Hips circumference in cm")
+    arm_cm: Optional[float] = Field(default=None, description="Arm circumference in cm")
+    thigh_cm: Optional[float] = Field(default=None, description="Thigh circumference in cm")
     notes: Optional[str] = Field(default=None, description="Weekly reflection or notes")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
 
 
 class Goal(SQLModel, table=True):
     """
-    Model for user goals.
-    
-    Goals can be weight-related, strength-based, or habit tracking.
+    Model for the user's active goal: daily nutrition targets and an
+    optional longer-term body goal (SPEC.md section 5). A single-user app,
+    so there is one active goal at a time; setting a new one replaces it.
     """
     __tablename__ = "goals"
-    
+
     id: Optional[int] = Field(default=None, primary_key=True)
-    title: str = Field(..., description="Goal title (e.g., 'Lose 5kg', 'Run 5k')")
-    description: Optional[str] = Field(default=None, description="Detailed goal description")
-    target_value: Optional[float] = Field(default=None, description="Target numeric value")
-    current_value: Optional[float] = Field(default=None, description="Current progress toward target")
-    unit: str = Field(default="", description="Unit of measurement for the goal")
-    due_date: Optional[date] = Field(default=None, description="Target completion date")
-    is_active: bool = Field(default=True, description="Whether the goal is still active")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
-    updated_at: Optional[datetime] = Field(default=None, description="Last update timestamp")
+    active: bool = Field(default=True, description="Whether this is the currently active goal")
+
+    # Daily nutrition targets (all nullable - set what you care about)
+    calorie_target: Optional[float] = Field(default=None, description="Daily calorie target (kcal)")
+    protein_target_g: Optional[float] = Field(default=None, description="Daily protein target (g)")
+    carb_target_g: Optional[float] = Field(default=None, description="Daily carbohydrate target (g)")
+    fat_target_g: Optional[float] = Field(default=None, description="Daily fat target (g)")
+
+    # Optional exercise target
+    training_days_per_week: Optional[int] = Field(default=None, description="Target training days per week")
+
+    # Optional body goal
+    target_weight_kg: Optional[float] = Field(default=None, description="Target body weight (kg)")
+    target_date: Optional[date] = Field(default=None, description="Target date for the body goal")
 
 
 class DailyEvaluation(SQLModel, table=True):

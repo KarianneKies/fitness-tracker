@@ -87,6 +87,24 @@ const api = {
     },
     
     /**
+     * Generic PUT request
+     */
+    async put(path, data) {
+        try {
+            const response = await fetch(`${this.baseUrl}${path}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            if (!response.ok) throw new Error('Network response was not ok');
+            return await response.json();
+        } catch (error) {
+            console.error('API PUT error:', error);
+            throw error;
+        }
+    },
+
+    /**
      * Generic DELETE request
      */
     async delete(path) {
@@ -173,6 +191,16 @@ function initTabs() {
             // Load saved meals for Food tab
             if (tabId === 'food' && typeof foodSearch !== 'undefined') {
                 foodSearch.loadSavedMeals();
+            }
+
+            // Load check-ins for Check-in tab
+            if (tabId === 'checkin' && typeof checkin !== 'undefined') {
+                checkin.loadCheckins();
+            }
+
+            // Refresh Today's Overview when returning to it
+            if (tabId === 'today' && typeof today !== 'undefined') {
+                today.loadToday();
             }
         });
     });
@@ -891,6 +919,16 @@ document.addEventListener('DOMContentLoaded', () => {
         foodSearch.init();
     }
 
+    // Initialize weekly check-in functionality
+    if (typeof checkin !== 'undefined' && checkin.init) {
+        checkin.init();
+    }
+
+    // Initialize Today's Overview (default active tab, so load right away)
+    if (typeof today !== 'undefined' && today.init) {
+        today.init();
+    }
+
     // Start new workout button
     const startWorkoutBtn = document.getElementById('start-new-workout');
     if (startWorkoutBtn) {
@@ -980,6 +1018,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     alert('Workout updated!');
 
                     loadWorkouts();
+                    if (typeof today !== 'undefined') today.loadToday();
                 } catch (error) {
                     console.error('Error saving workout edits:', error);
                     alert('Failed to save changes');
@@ -1039,10 +1078,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 let message = `Workout finished! Duration: ${timer.getFormattedTime()}\n\nAll sets have been saved. You can edit past workouts using the "Edit" button in the History tab.`;
                 
                 alert(message);
-                
+
                 // Reload workouts list
                 loadWorkouts();
-                
+                if (typeof today !== 'undefined') today.loadToday();
+
             } catch (error) {
                 console.error('Error finishing workout:', error);
                 alert('Failed to finish workout');
@@ -1535,6 +1575,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             await api.delete(`/workouts/${workoutId}`);
             loadWorkouts();
+            if (typeof today !== 'undefined') today.loadToday();
         } catch (error) {
             console.error('Error deleting workout:', error);
             alert('Failed to delete workout');
@@ -2433,6 +2474,7 @@ const foodSearch = {
             }
             this.closeMealBuilder();
             this.loadSavedMeals();
+            if (typeof today !== 'undefined') today.loadToday();
         } catch (error) {
             console.error('Error saving meal:', error);
             alert('Failed to save meal');
@@ -2794,6 +2836,7 @@ const foodSearch = {
         try {
             await api.delete(`/meals/${mealId}`);
             this.loadSavedMeals();
+            if (typeof today !== 'undefined') today.loadToday();
         } catch (error) {
             console.error('Error deleting meal:', error);
             alert('Failed to delete meal');
@@ -2815,6 +2858,615 @@ const foodSearch = {
 // can't see this module-scoped const otherwise - same reason workout's
 // history functions are assigned to window.* (e.g. window.showHistoryDetail).
 window.foodSearch = foodSearch;
+
+// ========== Weekly Check-in Functionality ==========
+const checkin = {
+    /** id of the check-in being edited, or null when adding a new one */
+    activeCheckinId: null,
+
+    /** Photo file selected for upload (kept in memory until Save) */
+    pendingPhoto: null,
+
+    init() {
+        const addBtn = document.getElementById('add-checkin-btn');
+        if (addBtn) addBtn.addEventListener('click', () => this.openForm());
+
+        const saveBtn = document.getElementById('save-checkin-btn');
+        if (saveBtn) saveBtn.addEventListener('click', () => this.saveCheckin());
+
+        const cancelBtn = document.getElementById('cancel-checkin-btn');
+        if (cancelBtn) cancelBtn.addEventListener('click', () => this.closeForm());
+
+        const photoInput = document.getElementById('checkin-photo-input');
+        if (photoInput) photoInput.addEventListener('change', (e) => this.handlePhotoSelect(e));
+
+        this.loadCheckins();
+    },
+
+    /**
+     * Open the form for a brand new check-in, resetting all fields and
+     * defaulting the date to today.
+     */
+    openForm() {
+        this.activeCheckinId = null;
+        this.pendingPhoto = null;
+
+        const addCard = document.getElementById('add-checkin-card');
+        if (addCard) addCard.style.display = 'none';
+
+        const section = document.getElementById('checkin-form-section');
+        if (section) section.style.display = 'block';
+
+        const titleEl = document.getElementById('checkin-form-title');
+        if (titleEl) titleEl.textContent = 'New Check-in';
+
+        const saveBtn = document.getElementById('save-checkin-btn');
+        if (saveBtn) saveBtn.textContent = 'Save Check-in';
+
+        ['checkin-weight-input', 'checkin-waist-input', 'checkin-chest-input',
+         'checkin-hips-input', 'checkin-arm-input', 'checkin-thigh-input'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+        const notesEl = document.getElementById('checkin-notes-input');
+        if (notesEl) notesEl.value = '';
+        const photoInput = document.getElementById('checkin-photo-input');
+        if (photoInput) photoInput.value = '';
+        const previewEl = document.getElementById('checkin-photo-preview');
+        if (previewEl) { previewEl.innerHTML = ''; previewEl.style.display = 'none'; }
+
+        const dateInput = document.getElementById('checkin-date-input');
+        if (dateInput) {
+            const today = new Date();
+            const localDate = new Date(today.getTime() - today.getTimezoneOffset() * 60000);
+            dateInput.value = localDate.toISOString().slice(0, 10);
+        }
+    },
+
+    /**
+     * Close the form without saving
+     */
+    closeForm() {
+        this.activeCheckinId = null;
+        this.pendingPhoto = null;
+
+        const section = document.getElementById('checkin-form-section');
+        if (section) section.style.display = 'none';
+
+        const addCard = document.getElementById('add-checkin-card');
+        if (addCard) addCard.style.display = 'block';
+    },
+
+    /**
+     * Handle a selected/captured progress photo: keep it in memory (uploaded
+     * only at Save time) and show a local preview.
+     */
+    handlePhotoSelect(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        this.pendingPhoto = file;
+
+        const previewEl = document.getElementById('checkin-photo-preview');
+        if (previewEl) {
+            previewEl.innerHTML = `<img src="${URL.createObjectURL(file)}" style="max-width: 100%; border-radius: 8px;">`;
+            previewEl.style.display = 'block';
+        }
+    },
+
+    /**
+     * Save the check-in: POST for a new one, PATCH when editing. Reuses the
+     * arrayBuffer-read upload workaround needed elsewhere for iOS Safari,
+     * where a freshly-captured camera photo can otherwise upload as an
+     * empty body.
+     */
+    async saveCheckin() {
+        const formData = new FormData();
+
+        const dateInput = document.getElementById('checkin-date-input');
+        if (dateInput && dateInput.value) formData.append('checkin_date', dateInput.value);
+
+        const fieldMap = {
+            'checkin-weight-input': 'weight_kg',
+            'checkin-waist-input': 'waist_cm',
+            'checkin-chest-input': 'chest_cm',
+            'checkin-hips-input': 'hips_cm',
+            'checkin-arm-input': 'arm_cm',
+            'checkin-thigh-input': 'thigh_cm',
+        };
+        for (const [elId, fieldName] of Object.entries(fieldMap)) {
+            const el = document.getElementById(elId);
+            if (el && el.value !== '') formData.append(fieldName, el.value);
+        }
+
+        const notesEl = document.getElementById('checkin-notes-input');
+        if (notesEl && notesEl.value.trim() !== '') formData.append('notes', notesEl.value.trim());
+
+        if (this.pendingPhoto) {
+            const arrayBuffer = await this.pendingPhoto.arrayBuffer();
+            const photoBlob = new Blob([arrayBuffer], { type: this.pendingPhoto.type || 'image/jpeg' });
+            formData.append('photo', photoBlob, this.pendingPhoto.name || 'checkin.jpg');
+        }
+
+        try {
+            const url = this.activeCheckinId
+                ? `${window.location.origin}/checkins/${this.activeCheckinId}`
+                : `${window.location.origin}/checkins`;
+            const response = await fetch(url, {
+                method: this.activeCheckinId ? 'PATCH' : 'POST',
+                body: formData,
+                cache: 'no-store',
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            alert(this.activeCheckinId ? 'Check-in updated!' : 'Check-in saved!');
+            this.closeForm();
+            this.loadCheckins();
+        } catch (error) {
+            console.error('Error saving check-in:', error);
+            alert('Failed to save check-in');
+        }
+    },
+
+    /**
+     * Load check-ins from GET /checkins and render them, most recent first
+     */
+    async loadCheckins() {
+        const listEl = document.getElementById('checkin-list');
+        if (!listEl) return;
+
+        try {
+            const checkins = await api.get('/checkins');
+            this.renderCheckins(checkins);
+        } catch (error) {
+            console.error('Error loading check-ins:', error);
+        }
+    },
+
+    /**
+     * Render the check-in history list, with a weight delta vs. the
+     * previous check-in when both have a recorded weight
+     */
+    renderCheckins(checkins) {
+        const listEl = document.getElementById('checkin-list');
+        if (!listEl) return;
+
+        if (!checkins || checkins.length === 0) {
+            listEl.className = 'empty-state';
+            listEl.innerHTML = 'No check-ins logged yet.';
+            return;
+        }
+
+        listEl.className = '';
+        listEl.innerHTML = checkins.map((c, index) => {
+            const previous = checkins[index + 1]; // list is most-recent-first
+            let deltaHtml = '';
+            if (c.weight_kg != null && previous && previous.weight_kg != null) {
+                const delta = c.weight_kg - previous.weight_kg;
+                const rounded = Math.round(Math.abs(delta) * 10) / 10;
+                if (rounded > 0) {
+                    const cls = delta < 0 ? 'checkin-delta-down' : 'checkin-delta-up';
+                    const arrow = delta < 0 ? '▼' : '▲';
+                    deltaHtml = `<span class="checkin-delta ${cls}">${arrow} ${rounded} kg since last check-in</span>`;
+                } else {
+                    deltaHtml = `<span class="checkin-delta">No change since last check-in</span>`;
+                }
+            }
+
+            const photoHtml = c.photo_path
+                ? `<img src="${this.escapeHtml(c.photo_path)}" class="checkin-card-photo">`
+                : '';
+
+            const statsParts = [];
+            if (c.weight_kg != null) statsParts.push(`${c.weight_kg} kg`);
+            if (c.waist_cm != null) statsParts.push(`waist ${c.waist_cm}cm`);
+            if (c.chest_cm != null) statsParts.push(`chest ${c.chest_cm}cm`);
+            if (c.hips_cm != null) statsParts.push(`hips ${c.hips_cm}cm`);
+            if (c.arm_cm != null) statsParts.push(`arm ${c.arm_cm}cm`);
+            if (c.thigh_cm != null) statsParts.push(`thigh ${c.thigh_cm}cm`);
+
+            return `
+                <div class="history-card" onclick="checkin.showDetail(${c.id})">
+                    <div class="history-card-header">
+                        <span class="history-card-name">${this.formatDate(c.checkin_date)}</span>
+                        <button class="history-menu-btn" onclick="event.stopPropagation(); checkin.showMenu(${c.id}, event)">☰</button>
+                    </div>
+                    ${photoHtml}
+                    <div style="font-size: 0.9rem; color: #333; margin-bottom: 0.25rem;">
+                        ${statsParts.length > 0 ? this.escapeHtml(statsParts.join(' · ')) : '<span style="color:#999;">No measurements recorded</span>'}
+                    </div>
+                    ${deltaHtml}
+                </div>
+            `;
+        }).join('');
+    },
+
+    /**
+     * Format a date-only string (YYYY-MM-DD) as local calendar components,
+     * avoiding the UTC-midnight rollback bug from `new Date(dateStr)`.
+     */
+    formatDate(dateStr) {
+        const [year, month, day] = dateStr.split('-').map(Number);
+        const date = new Date(year, month - 1, day);
+        return date.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+    },
+
+    /**
+     * Show the ☰ menu (Edit/Delete) - same pattern as the meal/workout menus
+     */
+    showMenu(checkinId, event) {
+        event.stopPropagation();
+        event.preventDefault();
+
+        const menu = document.createElement('div');
+        menu.style.cssText = `
+            position: fixed;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            padding: 0.5rem;
+            z-index: 1100;
+            min-width: 160px;
+        `;
+
+        menu.innerHTML = `
+            <button onclick="checkin.editCheckin(${checkinId}); this.closest('div').remove()" style="
+                width: 100%; padding: 0.75rem; text-align: left; background: none;
+                border: none; cursor: pointer; font-size: 0.9rem; color: #1a1a2e;
+            ">Edit</button>
+            <hr style="margin: 0.5rem 0; border: none; border-top: 1px solid #eee;">
+            <button onclick="checkin.deleteCheckin(${checkinId}); this.closest('div').remove()" style="
+                width: 100%; padding: 0.75rem; text-align: left; background: none;
+                border: none; cursor: pointer; font-size: 0.9rem; color: #dc3545;
+            ">Delete</button>
+        `;
+
+        // menu.style.position is 'fixed' (viewport-relative already) - do not
+        // add window.scrollY/scrollX or the menu drifts off-screen when scrolled.
+        const rect = event.currentTarget.getBoundingClientRect();
+        menu.style.top = `${rect.bottom}px`;
+        menu.style.left = `${rect.left}px`;
+
+        document.body.appendChild(menu);
+
+        const closeMenu = function() {
+            menu.remove();
+            document.removeEventListener('click', closeMenu);
+        };
+        setTimeout(() => document.addEventListener('click', closeMenu), 10);
+    },
+
+    /**
+     * Show the read-only detail view for a check-in
+     */
+    async showDetail(checkinId) {
+        try {
+            const c = await api.get(`/checkins/${checkinId}`);
+
+            const panel = document.createElement('div');
+            panel.className = 'checkin-detail-panel';
+
+            const statHtml = (label, value) => value != null
+                ? `<div><div class="checkin-detail-stat-label">${label}</div><div class="checkin-detail-stat-value">${value}</div></div>`
+                : '';
+
+            panel.innerHTML = `
+                <div class="checkin-detail-header">
+                    <button class="checkin-detail-close" onclick="this.closest('.checkin-detail-panel').remove()">×</button>
+                    <div class="checkin-detail-title">${this.formatDate(c.checkin_date)}</div>
+                    <button onclick="checkin.editCheckin(${checkinId}); this.closest('.checkin-detail-panel').remove()" class="checkin-detail-edit-btn">Edit</button>
+                </div>
+                <div class="checkin-detail-content">
+                    ${c.photo_path ? `<img src="${this.escapeHtml(c.photo_path)}" class="checkin-detail-photo">` : ''}
+                    <div class="checkin-detail-stats">
+                        ${statHtml('Weight', c.weight_kg != null ? `${c.weight_kg} kg` : null)}
+                        ${statHtml('Waist', c.waist_cm != null ? `${c.waist_cm} cm` : null)}
+                        ${statHtml('Chest', c.chest_cm != null ? `${c.chest_cm} cm` : null)}
+                        ${statHtml('Hips', c.hips_cm != null ? `${c.hips_cm} cm` : null)}
+                        ${statHtml('Arm', c.arm_cm != null ? `${c.arm_cm} cm` : null)}
+                        ${statHtml('Thigh', c.thigh_cm != null ? `${c.thigh_cm} cm` : null)}
+                    </div>
+                    ${c.notes ? `<div class="checkin-detail-notes">${this.escapeHtml(c.notes)}</div>` : ''}
+                </div>
+            `;
+
+            document.body.appendChild(panel);
+        } catch (error) {
+            console.error('Error loading check-in detail:', error);
+            alert('Failed to load check-in');
+        }
+    },
+
+    /**
+     * Open a check-in in the form for editing, pre-filled with its current values
+     */
+    async editCheckin(checkinId) {
+        try {
+            const c = await api.get(`/checkins/${checkinId}`);
+
+            this.activeCheckinId = c.id;
+            this.pendingPhoto = null;
+
+            const addCard = document.getElementById('add-checkin-card');
+            if (addCard) addCard.style.display = 'none';
+
+            const section = document.getElementById('checkin-form-section');
+            if (section) section.style.display = 'block';
+
+            const titleEl = document.getElementById('checkin-form-title');
+            if (titleEl) titleEl.textContent = 'Edit Check-in';
+
+            const saveBtn = document.getElementById('save-checkin-btn');
+            if (saveBtn) saveBtn.textContent = 'Save';
+
+            document.getElementById('checkin-date-input').value = c.checkin_date;
+            document.getElementById('checkin-weight-input').value = c.weight_kg ?? '';
+            document.getElementById('checkin-waist-input').value = c.waist_cm ?? '';
+            document.getElementById('checkin-chest-input').value = c.chest_cm ?? '';
+            document.getElementById('checkin-hips-input').value = c.hips_cm ?? '';
+            document.getElementById('checkin-arm-input').value = c.arm_cm ?? '';
+            document.getElementById('checkin-thigh-input').value = c.thigh_cm ?? '';
+            document.getElementById('checkin-notes-input').value = c.notes || '';
+
+            const photoInput = document.getElementById('checkin-photo-input');
+            if (photoInput) photoInput.value = '';
+            const previewEl = document.getElementById('checkin-photo-preview');
+            if (previewEl) {
+                if (c.photo_path) {
+                    previewEl.innerHTML = `<img src="${this.escapeHtml(c.photo_path)}" style="max-width: 100%; border-radius: 8px;"><p style="font-size: 0.8rem; color: #666; margin-top: 0.25rem;">Current photo - pick a new file to replace it</p>`;
+                    previewEl.style.display = 'block';
+                } else {
+                    previewEl.innerHTML = '';
+                    previewEl.style.display = 'none';
+                }
+            }
+
+            section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+        } catch (error) {
+            console.error('Error opening check-in for editing:', error);
+            alert('Failed to load check-in');
+        }
+    },
+
+    /**
+     * Delete a check-in - same pattern as deleteMeal/deleteWorkout
+     */
+    async deleteCheckin(checkinId) {
+        if (!confirm('Are you sure you want to delete this check-in?')) return;
+
+        try {
+            await api.delete(`/checkins/${checkinId}`);
+            this.loadCheckins();
+        } catch (error) {
+            console.error('Error deleting check-in:', error);
+            alert('Failed to delete check-in');
+        }
+    },
+
+    /**
+     * Escape HTML to prevent XSS
+     */
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+};
+
+// Expose globally for inline onclick="checkin...." handlers (see foodSearch
+// for why - module-scoped consts aren't visible from global-scope attributes)
+window.checkin = checkin;
+
+// ========== Today Tab Functionality ==========
+const today = {
+    /** Most recently loaded active goal (or all-null shape if none set) */
+    currentGoal: null,
+
+    init() {
+        const editBtn = document.getElementById('edit-goal-btn');
+        if (editBtn) editBtn.addEventListener('click', () => this.openGoalForm());
+
+        const saveBtn = document.getElementById('save-goal-btn');
+        if (saveBtn) saveBtn.addEventListener('click', () => this.saveGoal());
+
+        const cancelBtn = document.getElementById('cancel-goal-btn');
+        if (cancelBtn) cancelBtn.addEventListener('click', () => this.closeGoalForm());
+
+        this.loadToday();
+    },
+
+    /**
+     * Load the active goal, all meals, and all workouts, then compute and
+     * render today's/this week's totals against the goal. Reuses the
+     * existing GET /meals and GET /workouts endpoints and filters
+     * client-side rather than adding a dedicated backend aggregation route.
+     */
+    async loadToday() {
+        try {
+            const [goal, meals, workouts] = await Promise.all([
+                api.get('/goal'),
+                api.get('/meals'),
+                api.get('/workouts'),
+            ]);
+            this.currentGoal = goal;
+            this.render(goal, meals, workouts);
+        } catch (error) {
+            console.error('Error loading today overview:', error);
+        }
+    },
+
+    /** Today's date as YYYY-MM-DD in local time, matching meal_date's format */
+    todayString() {
+        const now = new Date();
+        const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+        return local.toISOString().slice(0, 10);
+    },
+
+    /** Local YYYY-MM-DD for an arbitrary date/datetime input */
+    localDateStr(dateInput) {
+        const d = new Date(dateInput);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    },
+
+    /** Midnight (local) of the Monday starting the current calendar week */
+    weekStart() {
+        const now = new Date();
+        const day = now.getDay(); // 0 = Sunday
+        const diffToMonday = (day === 0) ? 6 : day - 1;
+        return new Date(now.getFullYear(), now.getMonth(), now.getDate() - diffToMonday);
+    },
+
+    render(goal, meals, workouts) {
+        const todayStr = this.todayString();
+
+        // --- Nutrition: today's meals vs goal ---
+        const todaysMeals = (meals || []).filter((m) => m.meal_date === todayStr);
+        const totalCalories = todaysMeals.reduce((sum, m) => sum + (m.total_calories || 0), 0);
+        const totalProtein = todaysMeals.reduce((sum, m) => sum + (m.total_protein_g || 0), 0);
+        const totalCarbs = todaysMeals.reduce((sum, m) => sum + (m.total_carbs_g || 0), 0);
+        const totalFat = todaysMeals.reduce((sum, m) => sum + (m.total_fat_g || 0), 0);
+
+        document.getElementById('calories-consumed').textContent = Math.round(totalCalories);
+        document.getElementById('calories-goal').textContent =
+            goal.calorie_target != null ? Math.round(goal.calorie_target) : 'Not set';
+
+        document.getElementById('protein-progress').textContent = goal.protein_target_g != null
+            ? `${totalProtein.toFixed(1)}g / ${goal.protein_target_g}g`
+            : `${totalProtein.toFixed(1)}g`;
+        document.getElementById('carbs-progress').textContent = goal.carb_target_g != null
+            ? `${totalCarbs.toFixed(1)}g / ${goal.carb_target_g}g`
+            : `${totalCarbs.toFixed(1)}g`;
+        document.getElementById('fat-progress').textContent = goal.fat_target_g != null
+            ? `${totalFat.toFixed(1)}g / ${goal.fat_target_g}g`
+            : `${totalFat.toFixed(1)}g`;
+
+        // --- Exercise: today's duration + this week's workout count vs goal ---
+        const todaysWorkouts = (workouts || []).filter((w) => this.localDateStr(w.started_at) === todayStr);
+        const totalDurationSec = todaysWorkouts.reduce((sum, w) => sum + (w.duration_seconds || 0), 0);
+        document.getElementById('exercise-duration').textContent = `${Math.round(totalDurationSec / 60)} min`;
+
+        const weekStartDate = this.weekStart();
+        const thisWeeksWorkouts = (workouts || []).filter((w) => new Date(w.started_at) >= weekStartDate);
+        document.getElementById('training-days-progress').textContent = goal.training_days_per_week != null
+            ? `${thisWeeksWorkouts.length} / ${goal.training_days_per_week} workouts`
+            : `${thisWeeksWorkouts.length} workouts`;
+
+        this.renderGoalSummary(goal);
+    },
+
+    /**
+     * Render a plain-language summary of the active goal, or an empty state
+     */
+    renderGoalSummary(goal) {
+        const summaryEl = document.getElementById('goal-summary');
+        if (!summaryEl) return;
+
+        const parts = [];
+        if (goal.calorie_target != null) parts.push(`${Math.round(goal.calorie_target)} kcal/day`);
+        if (goal.protein_target_g != null) parts.push(`${goal.protein_target_g}g protein`);
+        if (goal.carb_target_g != null) parts.push(`${goal.carb_target_g}g carbs`);
+        if (goal.fat_target_g != null) parts.push(`${goal.fat_target_g}g fat`);
+        if (goal.training_days_per_week != null) parts.push(`train ${goal.training_days_per_week}x/week`);
+        if (goal.target_weight_kg != null) {
+            parts.push(`target weight ${goal.target_weight_kg}kg${goal.target_date ? ` by ${this.formatDate(goal.target_date)}` : ''}`);
+        }
+
+        if (parts.length === 0) {
+            summaryEl.className = 'empty-state';
+            summaryEl.innerHTML = 'No goal set yet.';
+        } else {
+            summaryEl.className = '';
+            summaryEl.innerHTML = parts.map((p) => this.escapeHtml(p)).join('<br>');
+        }
+    },
+
+    /**
+     * Open the goal form, pre-filled with the currently active goal (if any)
+     */
+    openGoalForm() {
+        const goal = this.currentGoal || {};
+        document.getElementById('goal-calories-input').value = goal.calorie_target ?? '';
+        document.getElementById('goal-protein-input').value = goal.protein_target_g ?? '';
+        document.getElementById('goal-carbs-input').value = goal.carb_target_g ?? '';
+        document.getElementById('goal-fat-input').value = goal.fat_target_g ?? '';
+        document.getElementById('goal-training-days-input').value = goal.training_days_per_week ?? '';
+        document.getElementById('goal-target-weight-input').value = goal.target_weight_kg ?? '';
+        document.getElementById('goal-target-date-input').value = goal.target_date || '';
+
+        const section = document.getElementById('goal-form-section');
+        if (section) {
+            section.style.display = 'block';
+            section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    },
+
+    closeGoalForm() {
+        const section = document.getElementById('goal-form-section');
+        if (section) section.style.display = 'none';
+    },
+
+    /**
+     * Save the goal via PUT /goal (full replace - always sends every field,
+     * since the form is always pre-filled from the current goal before
+     * editing, nothing gets silently cleared).
+     */
+    async saveGoal() {
+        const toNumOrNull = (id) => {
+            const el = document.getElementById(id);
+            if (!el || el.value === '') return null;
+            const v = parseFloat(el.value);
+            return isNaN(v) ? null : v;
+        };
+        const toIntOrNull = (id) => {
+            const el = document.getElementById(id);
+            if (!el || el.value === '') return null;
+            const v = parseInt(el.value, 10);
+            return isNaN(v) ? null : v;
+        };
+        const dateEl = document.getElementById('goal-target-date-input');
+
+        const payload = {
+            calorie_target: toNumOrNull('goal-calories-input'),
+            protein_target_g: toNumOrNull('goal-protein-input'),
+            carb_target_g: toNumOrNull('goal-carbs-input'),
+            fat_target_g: toNumOrNull('goal-fat-input'),
+            training_days_per_week: toIntOrNull('goal-training-days-input'),
+            target_weight_kg: toNumOrNull('goal-target-weight-input'),
+            target_date: dateEl && dateEl.value ? dateEl.value : null,
+        };
+
+        try {
+            const goal = await api.put('/goal', payload);
+            this.currentGoal = goal;
+            this.closeGoalForm();
+            this.loadToday();
+        } catch (error) {
+            console.error('Error saving goal:', error);
+            alert('Failed to save goal');
+        }
+    },
+
+    /**
+     * Format a date-only string (YYYY-MM-DD) as local calendar components,
+     * avoiding the UTC-midnight rollback bug from `new Date(dateStr)`.
+     */
+    formatDate(dateStr) {
+        const [year, month, day] = dateStr.split('-').map(Number);
+        const date = new Date(year, month - 1, day);
+        return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    },
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+};
+
+window.today = today;
+
+
 
 // ========== Service Worker registration (if supported)
 if ('serviceWorker' in navigator) {

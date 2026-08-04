@@ -18,13 +18,22 @@ Endpoints:
 - GET /meals/{id}: Get one meal with all food items and totals
 - PATCH /meals/{id}: Update a meal (name, date, add/edit/remove food items)
 - DELETE /meals/{id}: Delete a meal
-- Static file mount for frontend
+- POST /checkins: Save a weekly check-in (photo + weight + measurements)
+- GET /checkins: List all check-ins (most recent first)
+- GET /checkins/{id}: Get one check-in
+- PATCH /checkins/{id}: Update a check-in
+- DELETE /checkins/{id}: Delete a check-in
+- GET /goal: Get the active goal
+- PUT /goal: Set/update the active goal
+- Static file mount for frontend, and for saved photos at /photos
 """
 
+import os
+import uuid
 from datetime import date, datetime
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
@@ -34,7 +43,7 @@ from sqlalchemy import case, func
 
 from .config import FRONTEND_DIR, PHOTOS_DIR, HAND_MEASUREMENTS
 from .database import create_db_and_tables, get_session
-from .models import Workout, Exercise, ExerciseSet, Food, UserFood, Meal, FoodItem as FoodItemModel
+from .models import Workout, Exercise, ExerciseSet, Food, UserFood, Meal, FoodItem as FoodItemModel, WeeklyCheckin, Goal
 from .vision import analyze_food_photo as vision_analyze
 from .vision import analyze_nutrition_label as vision_analyze_label
 
@@ -1109,9 +1118,342 @@ async def delete_workout(workout_id: int):
         # Delete the workout
         session.delete(workout)
         session.commit()
-        
+
         return {"message": "Workout deleted successfully"}
 
+
+# ========== Weekly Check-in Models ==========
+class CheckinResponse(BaseModel):
+    """Response model for a weekly check-in."""
+    id: int
+    checkin_date: str
+    photo_path: Optional[str]
+    weight_kg: Optional[float]
+    waist_cm: Optional[float]
+    chest_cm: Optional[float]
+    hips_cm: Optional[float]
+    arm_cm: Optional[float]
+    thigh_cm: Optional[float]
+    notes: Optional[str]
+
+
+def _checkin_to_response(checkin: WeeklyCheckin) -> CheckinResponse:
+    """Build a CheckinResponse from a WeeklyCheckin row, exposing photo_path
+    as the URL the frontend can load it from (see the /photos static mount)."""
+    return CheckinResponse(
+        id=checkin.id,
+        checkin_date=checkin.checkin_date.isoformat(),
+        photo_path=f"/photos/{os.path.basename(checkin.photo_path)}" if checkin.photo_path else None,
+        weight_kg=checkin.weight_kg,
+        waist_cm=checkin.waist_cm,
+        chest_cm=checkin.chest_cm,
+        hips_cm=checkin.hips_cm,
+        arm_cm=checkin.arm_cm,
+        thigh_cm=checkin.thigh_cm,
+        notes=checkin.notes,
+    )
+
+
+def _generate_checkin_photo_path() -> str:
+    """Generate a fresh timestamped path in PHOTOS_DIR for a check-in photo."""
+    os.makedirs(PHOTOS_DIR, exist_ok=True)
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"checkin_{timestamp}_{uuid.uuid4().hex[:8]}.jpg"
+    return os.path.join(PHOTOS_DIR, filename)
+
+
+# ========== Weekly Check-in Endpoints ==========
+@app.post("/checkins", response_model=CheckinResponse)
+async def create_checkin(
+    checkin_date: Optional[str] = Form(None),
+    weight_kg: Optional[float] = Form(None),
+    waist_cm: Optional[float] = Form(None),
+    chest_cm: Optional[float] = Form(None),
+    hips_cm: Optional[float] = Form(None),
+    arm_cm: Optional[float] = Form(None),
+    thigh_cm: Optional[float] = Form(None),
+    notes: Optional[str] = Form(None),
+    photo: Optional[UploadFile] = File(None),
+):
+    """
+    Save a weekly check-in: an optional progress photo, weight, body
+    circumference measurements, and notes.
+
+    Args:
+        checkin_date: ISO date string (YYYY-MM-DD); defaults to today
+        weight_kg, waist_cm, chest_cm, hips_cm, arm_cm, thigh_cm: optional measurements
+        notes: optional reflection text
+        photo: optional progress photo
+
+    Returns:
+        CheckinResponse: The saved check-in
+    """
+    photo_path = None
+    if photo is not None and photo.filename:
+        photo_path = _generate_checkin_photo_path()
+        content = await photo.read()
+        with open(photo_path, "wb") as f:
+            f.write(content)
+
+    with get_session() as session:
+        checkin_kwargs = {
+            "weight_kg": weight_kg,
+            "waist_cm": waist_cm,
+            "chest_cm": chest_cm,
+            "hips_cm": hips_cm,
+            "arm_cm": arm_cm,
+            "thigh_cm": thigh_cm,
+            "notes": notes,
+            "photo_path": photo_path,
+        }
+        if checkin_date:
+            try:
+                checkin_kwargs["checkin_date"] = date.fromisoformat(checkin_date)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="checkin_date must be YYYY-MM-DD")
+
+        db_checkin = WeeklyCheckin(**checkin_kwargs)
+        session.add(db_checkin)
+        session.commit()
+        session.refresh(db_checkin)
+
+        return _checkin_to_response(db_checkin)
+
+
+@app.get("/checkins", response_model=List[CheckinResponse])
+async def get_checkins():
+    """
+    Get all weekly check-ins, most recent first.
+
+    Returns:
+        List[CheckinResponse]: All check-ins ordered by date descending
+    """
+    with get_session() as session:
+        checkins = session.query(WeeklyCheckin).order_by(
+            WeeklyCheckin.checkin_date.desc(), WeeklyCheckin.created_at.desc()
+        ).all()
+        return [_checkin_to_response(c) for c in checkins]
+
+
+@app.get("/checkins/{checkin_id}", response_model=CheckinResponse)
+async def get_checkin(checkin_id: int):
+    """
+    Get one weekly check-in.
+
+    Args:
+        checkin_id: The ID of the check-in to retrieve
+
+    Returns:
+        CheckinResponse: The check-in
+    """
+    with get_session() as session:
+        checkin = session.query(WeeklyCheckin).filter(WeeklyCheckin.id == checkin_id).first()
+        if not checkin:
+            raise HTTPException(status_code=404, detail="Check-in not found")
+        return _checkin_to_response(checkin)
+
+
+@app.patch("/checkins/{checkin_id}", response_model=CheckinResponse)
+async def update_checkin(
+    checkin_id: int,
+    checkin_date: Optional[str] = Form(None),
+    weight_kg: Optional[float] = Form(None),
+    waist_cm: Optional[float] = Form(None),
+    chest_cm: Optional[float] = Form(None),
+    hips_cm: Optional[float] = Form(None),
+    arm_cm: Optional[float] = Form(None),
+    thigh_cm: Optional[float] = Form(None),
+    notes: Optional[str] = Form(None),
+    photo: Optional[UploadFile] = File(None),
+):
+    """
+    Update a weekly check-in. Sending a new photo replaces the old one
+    (the previous file is removed); omitting fields leaves them unchanged.
+
+    Args:
+        checkin_id: The ID of the check-in to update
+        (other args as in create_checkin)
+
+    Returns:
+        CheckinResponse: The updated check-in
+    """
+    with get_session() as session:
+        db_checkin = session.query(WeeklyCheckin).filter(WeeklyCheckin.id == checkin_id).first()
+        if not db_checkin:
+            raise HTTPException(status_code=404, detail="Check-in not found")
+
+        if checkin_date:
+            try:
+                db_checkin.checkin_date = date.fromisoformat(checkin_date)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="checkin_date must be YYYY-MM-DD")
+        if weight_kg is not None:
+            db_checkin.weight_kg = weight_kg
+        if waist_cm is not None:
+            db_checkin.waist_cm = waist_cm
+        if chest_cm is not None:
+            db_checkin.chest_cm = chest_cm
+        if hips_cm is not None:
+            db_checkin.hips_cm = hips_cm
+        if arm_cm is not None:
+            db_checkin.arm_cm = arm_cm
+        if thigh_cm is not None:
+            db_checkin.thigh_cm = thigh_cm
+        if notes is not None:
+            db_checkin.notes = notes
+
+        if photo is not None and photo.filename:
+            new_path = _generate_checkin_photo_path()
+            content = await photo.read()
+            with open(new_path, "wb") as f:
+                f.write(content)
+
+            old_path = db_checkin.photo_path
+            db_checkin.photo_path = new_path
+            if old_path:
+                try:
+                    os.remove(old_path)
+                except OSError:
+                    pass
+
+        session.commit()
+        session.refresh(db_checkin)
+
+        return _checkin_to_response(db_checkin)
+
+
+@app.delete("/checkins/{checkin_id}")
+async def delete_checkin(checkin_id: int):
+    """
+    Delete a weekly check-in and its photo file, if any.
+
+    Args:
+        checkin_id: The ID of the check-in to delete
+
+    Returns:
+        dict: Success message
+    """
+    with get_session() as session:
+        checkin = session.query(WeeklyCheckin).filter(WeeklyCheckin.id == checkin_id).first()
+        if not checkin:
+            raise HTTPException(status_code=404, detail="Check-in not found")
+
+        if checkin.photo_path:
+            try:
+                os.remove(checkin.photo_path)
+            except OSError:
+                pass
+
+        session.delete(checkin)
+        session.commit()
+
+        return {"message": "Check-in deleted successfully"}
+
+
+# ========== Goal Models ==========
+class GoalUpdate(BaseModel):
+    """Request model for setting/updating the active goal. All fields optional -
+    only set what you care about."""
+    calorie_target: Optional[float] = None
+    protein_target_g: Optional[float] = None
+    carb_target_g: Optional[float] = None
+    fat_target_g: Optional[float] = None
+    training_days_per_week: Optional[int] = None
+    target_weight_kg: Optional[float] = None
+    target_date: Optional[str] = None  # ISO date string (YYYY-MM-DD)
+
+
+class GoalResponse(BaseModel):
+    """Response model for the active goal. All fields null if no goal has been set yet."""
+    id: Optional[int]
+    calorie_target: Optional[float]
+    protein_target_g: Optional[float]
+    carb_target_g: Optional[float]
+    fat_target_g: Optional[float]
+    training_days_per_week: Optional[int]
+    target_weight_kg: Optional[float]
+    target_date: Optional[str]
+
+
+def _goal_to_response(goal: Optional[Goal]) -> GoalResponse:
+    if goal is None:
+        return GoalResponse(
+            id=None, calorie_target=None, protein_target_g=None, carb_target_g=None,
+            fat_target_g=None, training_days_per_week=None, target_weight_kg=None, target_date=None,
+        )
+    return GoalResponse(
+        id=goal.id,
+        calorie_target=goal.calorie_target,
+        protein_target_g=goal.protein_target_g,
+        carb_target_g=goal.carb_target_g,
+        fat_target_g=goal.fat_target_g,
+        training_days_per_week=goal.training_days_per_week,
+        target_weight_kg=goal.target_weight_kg,
+        target_date=goal.target_date.isoformat() if goal.target_date else None,
+    )
+
+
+# ========== Goal Endpoints ==========
+@app.get("/goal", response_model=GoalResponse)
+async def get_goal():
+    """
+    Get the active goal, if one has been set.
+
+    Returns:
+        GoalResponse: The active goal, or all-null fields if none is set
+    """
+    with get_session() as session:
+        goal = session.query(Goal).filter(Goal.active == True).order_by(Goal.created_at.desc()).first()  # noqa: E712
+        return _goal_to_response(goal)
+
+
+@app.put("/goal", response_model=GoalResponse)
+async def set_goal(goal_update: GoalUpdate):
+    """
+    Set or update the active goal. A single-user app, so this replaces
+    whatever the current active goal's field values are (existing active
+    goal is updated in place rather than creating a new row each time).
+
+    Args:
+        goal_update: GoalUpdate with the target fields to set
+
+    Returns:
+        GoalResponse: The saved active goal
+    """
+    with get_session() as session:
+        goal = session.query(Goal).filter(Goal.active == True).order_by(Goal.created_at.desc()).first()  # noqa: E712
+        if goal is None:
+            goal = Goal(active=True)
+            session.add(goal)
+
+        goal.calorie_target = goal_update.calorie_target
+        goal.protein_target_g = goal_update.protein_target_g
+        goal.carb_target_g = goal_update.carb_target_g
+        goal.fat_target_g = goal_update.fat_target_g
+        goal.training_days_per_week = goal_update.training_days_per_week
+        goal.target_weight_kg = goal_update.target_weight_kg
+        if goal_update.target_date:
+            try:
+                goal.target_date = date.fromisoformat(goal_update.target_date)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="target_date must be YYYY-MM-DD")
+        else:
+            goal.target_date = None
+
+        session.commit()
+        session.refresh(goal)
+
+        return _goal_to_response(goal)
+
+
+# Serve saved photos (meal + check-in) - must be mounted before the "/"
+# frontend catch-all below
+os.makedirs(PHOTOS_DIR, exist_ok=True)
+app.mount(
+    path="/photos",
+    app=StaticFiles(directory=PHOTOS_DIR),
+    name="photos"
+)
 
 # Mount static files for frontend
 app.mount(
