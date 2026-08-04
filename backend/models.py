@@ -13,6 +13,7 @@ This module defines all database models:
 - Goal: User goals (weight, strength, etc.)
 - DailyEvaluation: Daily habit and mood evaluation
 - Food: USDA FoodData Central food reference (per-100g macros)
+- UserFood: User-added food reference (e.g. scanned from a nutrition label)
 """
 
 from datetime import date, datetime
@@ -37,6 +38,25 @@ class Food(SQLModel, table=True):
     protein_g: float = Field(..., description="Protein in grams per 100g")
     carbs_g: float = Field(..., description="Carbohydrate in grams per 100g")
     fat_g: float = Field(..., description="Total fat in grams per 100g")
+
+
+class UserFood(SQLModel, table=True):
+    """
+    Model for a user-added food reference (e.g. scanned from a nutrition
+    label photo and reviewed/corrected by the user).
+
+    Kept in a separate table from Food (the USDA import) so user-added
+    products are never wiped out when the USDA dataset is re-imported.
+    """
+    __tablename__ = "user_foods"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    description: str = Field(..., index=True, description="Product name")
+    calories_kcal: float = Field(..., description="Energy in kcal per 100g")
+    protein_g: float = Field(..., description="Protein in grams per 100g")
+    carbs_g: float = Field(..., description="Carbohydrate in grams per 100g")
+    fat_g: float = Field(..., description="Total fat in grams per 100g")
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
 
 
 class Workout(SQLModel, table=True):

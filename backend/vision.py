@@ -6,13 +6,15 @@ LM Studio server with an OpenAI-compatible API.
 
 Functions:
 - analyze_food_photo: Send a photo to LM Studio and get food identification
+- analyze_nutrition_label: Send a nutrition label photo to LM Studio and
+  extract the printed product name, serving size, and per-serving macros
 """
 
 import base64
 import httpx
 from typing import Dict, List, Optional
 
-from .config import LM_STUDIO_URL
+from .config import LM_STUDIO_URL, LM_STUDIO_VISION_MODEL
 
 
 async def analyze_food_photo(image_path: str, hand_measurements: Optional[Dict] = None) -> Optional[List[Dict]]:
@@ -68,7 +70,7 @@ Be conservative with portion estimates - it's better to underestimate than overe
 
         # Build the OpenAI-compatible payload
         payload = {
-            "model": "local",
+            "model": LM_STUDIO_VISION_MODEL,
             "messages": [
                 {
                     "role": "user",
@@ -141,4 +143,121 @@ Be conservative with portion estimates - it's better to underestimate than overe
         return None
     except Exception as e:
         print(f"Error analyzing food photo: {e}")
+        return None
+
+
+async def analyze_nutrition_label(image_bytes: bytes) -> Optional[Dict]:
+    """
+    Send a photo of a nutrition facts label to LM Studio and extract the
+    printed values. The model only transcribes what's printed on the label
+    (OCR/extraction) - it does not compute or estimate anything. Per-100g
+    conversion from serving size happens in application code, not the model.
+
+    Args:
+        image_bytes: Raw bytes of the label photo
+
+    Returns:
+        A dict with keys: product_name, serving_size_g, calories_kcal,
+        protein_g, carbs_g, fat_g. Any value the model couldn't read is
+        None. Returns None if the call fails entirely (e.g. LM Studio
+        unreachable) - callers should treat that as "nothing extracted",
+        not an error, and fall back to a blank manual-entry form.
+    """
+    try:
+        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+
+        prompt = """This is a photo of a food product's nutrition facts label (and packaging, if visible).
+
+Read ONLY what is printed. Do not calculate, estimate, or guess any value you cannot clearly read.
+
+Return a JSON object with exactly these fields:
+- product_name: string or null (the product's name, from the packaging if visible)
+- serving_size_g: number or null (the serving size in grams, if stated - convert only obvious units like "30g" or "1 bar (40g)"; if the serving size is not given in or convertible to grams, use null)
+- calories_kcal: number or null (calories PER SERVING as printed, in kcal)
+- protein_g: number or null (protein PER SERVING as printed, in grams)
+- carbs_g: number or null (total carbohydrate PER SERVING as printed, in grams)
+- fat_g: number or null (total fat PER SERVING as printed, in grams)
+
+If the label states values "per 100g" instead of per serving, set serving_size_g to 100 and use those values directly.
+
+Example output format:
+{"product_name": "Sabra Classic Hummus", "serving_size_g": 30, "calories_kcal": 70, "protein_g": 2, "carbs_g": 4, "fat_g": 5}
+
+Return ONLY the JSON object, no other text."""
+
+        payload = {
+            "model": LM_STUDIO_VISION_MODEL,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "temperature": 0.1,
+            "max_tokens": 512
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{LM_STUDIO_URL}/chat/completions",
+                json=payload,
+                timeout=30.0
+            )
+
+            if response.status_code != 200:
+                print(f"LM Studio API error: {response.status_code} - {response.text}")
+                return None
+
+            result = response.json()
+
+        if not result.get("choices") or not result["choices"][0].get("message", {}).get("content"):
+            return None
+
+        content = result["choices"][0]["message"]["content"].strip()
+
+        import json
+
+        # Clean up the response - extract JSON object if wrapped in markdown or other text
+        json_start = content.find('{')
+        json_end = content.rfind('}') + 1
+
+        if json_start >= 0 and json_end > json_start:
+            content = content[json_start:json_end]
+
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            print(f"Failed to parse LM Studio response as JSON: {content}")
+            return None
+
+        if not isinstance(data, dict):
+            return None
+
+        def _num_or_none(value):
+            if value is None:
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        return {
+            "product_name": str(data["product_name"]) if data.get("product_name") else None,
+            "serving_size_g": _num_or_none(data.get("serving_size_g")),
+            "calories_kcal": _num_or_none(data.get("calories_kcal")),
+            "protein_g": _num_or_none(data.get("protein_g")),
+            "carbs_g": _num_or_none(data.get("carbs_g")),
+            "fat_g": _num_or_none(data.get("fat_g")),
+        }
+
+    except Exception as e:
+        print(f"Error analyzing nutrition label: {e}")
         return None

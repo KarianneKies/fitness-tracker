@@ -28,6 +28,11 @@ PHOTOS_DIR: str = os.path.join(PROJECT_ROOT, "data", "photos")
 # LM Studio (vision model) endpoint - OpenAI-compatible
 LM_STUDIO_URL: str = "http://localhost:3142/v1"
 
+# Vision model identifier as loaded in LM Studio. Some LM Studio setups accept
+# a generic alias like "local"; this one requires the exact loaded model id
+# (check `curl http://localhost:3142/v1/models` if this ever needs updating).
+LM_STUDIO_VISION_MODEL: str = "qwen/qwen3-vl-30b"
+
 # User hand measurements (optional - for photo portion estimates)
 # These should be set by the user via the settings UI
 HAND_MEASUREMENTS: dict[str, Optional[float]] = {

@@ -10,25 +10,33 @@ Endpoints:
 - GET /workouts/{id}: Get one workout with all exercises and sets
 - PATCH /workouts/{id}: Update a workout (finish, add/edit exercises/sets)
 - DELETE /workouts/{id}: Delete a workout
-- GET /foods/search: Search the local USDA food reference by description
+- GET /foods/search: Search local food references (USDA + user-added) by description
+- POST /foods/label-scan: Extract product name/macros from a nutrition label photo
+- POST /foods/custom: Save a user-reviewed custom product
 - POST /meals: Save a meal with its food items (e.g. from manual food search)
 - GET /meals: List all meals with their food items and totals
+- GET /meals/{id}: Get one meal with all food items and totals
+- PATCH /meals/{id}: Update a meal (name, date, add/edit/remove food items)
+- DELETE /meals/{id}: Delete a meal
 - Static file mount for frontend
 """
 
 from datetime import date, datetime
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import case, func
 
 from .config import FRONTEND_DIR, PHOTOS_DIR, HAND_MEASUREMENTS
 from .database import create_db_and_tables, get_session
-from .models import Workout, Exercise, ExerciseSet, Food, Meal, FoodItem as FoodItemModel
+from .models import Workout, Exercise, ExerciseSet, Food, UserFood, Meal, FoodItem as FoodItemModel
 from .vision import analyze_food_photo as vision_analyze
+from .vision import analyze_nutrition_label as vision_analyze_label
 
 
 # Create FastAPI app
@@ -55,6 +63,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Temporary diagnostic logging for 422s on upload endpoints - a real device
+# has been hitting "Field required" on /foods/label-scan with no obvious
+# client-side cause; this logs exactly what the server actually received so
+# the next occurrence is diagnosable instead of a guess. Safe to remove once
+# that's root-caused - it only logs, it doesn't change any response.
+@app.exception_handler(RequestValidationError)
+async def log_validation_errors(request: Request, exc: RequestValidationError):
+    if request.url.path in ("/foods/label-scan", "/meals/photo"):
+        content_type = request.headers.get("content-type", "<missing>")
+        content_length = request.headers.get("content-length", "<missing>")
+        user_agent = request.headers.get("user-agent", "<missing>")
+        print(
+            f"422 on {request.url.path} from {request.client.host if request.client else '?'}: "
+            f"errors={exc.errors()} content-type={content_type!r} content-length={content_length!r} "
+            f"user-agent={user_agent!r}"
+        )
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 
 # ========== Workout Models ==========
@@ -508,30 +535,45 @@ async def analyze_food_photo(photo: UploadFile = File(...)):
 
 # ========== Food Search Models ==========
 class FoodSearchResult(BaseModel):
-    """A USDA food reference match, with per-100g macros."""
+    """A food reference match (USDA or user-added), with per-100g macros."""
     id: int
     description: str
     calories_kcal: float
     protein_g: float
     carbs_g: float
     fat_g: float
+    source: str  # "usda" or "custom"
+
+
+def _rank_match(description: str, query: str) -> int:
+    """Rank a description's match quality against a search query: 0 = exact,
+    1 = prefix, 2 = other substring match. Lower ranks sort first."""
+    lower_desc = description.lower()
+    lower_query = query.lower()
+    if lower_desc == lower_query:
+        return 0
+    if lower_desc.startswith(lower_query):
+        return 1
+    return 2
 
 
 # ========== Food Search Endpoint ==========
 @app.get("/foods/search", response_model=List[FoodSearchResult])
 async def search_foods(q: str):
     """
-    Search the local USDA food reference by description.
+    Search the local food references (USDA import + user-added products) by
+    description.
 
-    Case-insensitive substring match on `description`, ordered so exact
-    matches rank first, then prefix matches, then other substring matches
-    (shorter descriptions first as a tiebreak), limited to 20 results.
+    Case-insensitive substring match, ordered so exact matches rank first,
+    then prefix matches, then other substring matches (shorter descriptions
+    first as a tiebreak), limited to 20 results across both sources.
 
     Args:
         q: Search query (e.g. "chicken")
 
     Returns:
-        List[FoodSearchResult]: Matching foods with their per-100g macros
+        List[FoodSearchResult]: Matching foods with their per-100g macros,
+        each tagged with source "usda" or "custom"
     """
     query = q.strip()
     if not query:
@@ -544,7 +586,7 @@ async def search_foods(q: str):
             (Food.description.ilike(f"{query}%"), 1),
             else_=2,
         )
-        foods = (
+        usda_foods = (
             session.query(Food)
             .filter(Food.description.ilike(like_pattern))
             .order_by(match_rank, func.length(Food.description))
@@ -552,7 +594,20 @@ async def search_foods(q: str):
             .all()
         )
 
-        return [
+        user_match_rank = case(
+            (func.lower(UserFood.description) == query.lower(), 0),
+            (UserFood.description.ilike(f"{query}%"), 1),
+            else_=2,
+        )
+        user_foods = (
+            session.query(UserFood)
+            .filter(UserFood.description.ilike(like_pattern))
+            .order_by(user_match_rank, func.length(UserFood.description))
+            .limit(20)
+            .all()
+        )
+
+        results = [
             FoodSearchResult(
                 id=food.id,
                 description=food.description,
@@ -560,14 +615,121 @@ async def search_foods(q: str):
                 protein_g=food.protein_g,
                 carbs_g=food.carbs_g,
                 fat_g=food.fat_g,
+                source="usda",
             )
-            for food in foods
+            for food in usda_foods
+        ] + [
+            FoodSearchResult(
+                id=food.id,
+                description=food.description,
+                calories_kcal=food.calories_kcal,
+                protein_g=food.protein_g,
+                carbs_g=food.carbs_g,
+                fat_g=food.fat_g,
+                source="custom",
+            )
+            for food in user_foods
         ]
+
+        results.sort(key=lambda r: (_rank_match(r.description, query), len(r.description)))
+        return results[:20]
+
+
+# ========== Nutrition Label Scan / Custom Food Models ==========
+class LabelScanResponse(BaseModel):
+    """Values extracted from a nutrition label photo. Any field the model
+    couldn't read is None - never a guessed number."""
+    product_name: Optional[str] = None
+    serving_size_g: Optional[float] = None
+    calories_kcal: Optional[float] = None
+    protein_g: Optional[float] = None
+    carbs_g: Optional[float] = None
+    fat_g: Optional[float] = None
+
+
+class CustomFoodCreate(BaseModel):
+    """Request model for saving a user-reviewed custom product."""
+    description: str
+    calories_kcal: float
+    protein_g: float
+    carbs_g: float
+    fat_g: float
+
+
+# ========== Nutrition Label Scan / Custom Food Endpoints ==========
+@app.post("/foods/label-scan", response_model=LabelScanResponse)
+async def scan_nutrition_label(photo: UploadFile = File(...)):
+    """
+    Analyze a nutrition label photo and extract the printed product name,
+    serving size, and per-serving macros for the user to review before saving.
+
+    The model only transcribes what's printed - never estimates. If LM
+    Studio is unavailable or nothing could be read, returns all-null fields
+    (200 OK) rather than an error, so the caller can fall back to a blank
+    manual-entry form.
+
+    Args:
+        photo: The uploaded label photo
+
+    Returns:
+        LabelScanResponse: Extracted fields (null where unreadable/unavailable)
+    """
+    image_bytes = await photo.read()
+    extracted = await vision_analyze_label(image_bytes)
+
+    if extracted is None:
+        return LabelScanResponse()
+
+    return LabelScanResponse(**extracted)
+
+
+@app.post("/foods/custom", response_model=FoodSearchResult)
+async def create_custom_food(food: CustomFoodCreate):
+    """
+    Save a user-reviewed custom product (e.g. from a nutrition label scan)
+    to the local food reference, so it can be found via /foods/search and
+    used the same way as a USDA food.
+
+    Stored in a separate table from the USDA import (UserFood), so it is
+    never lost when the USDA dataset is re-imported.
+
+    Args:
+        food: CustomFoodCreate with the product's name and per-100g macros
+
+    Returns:
+        FoodSearchResult: The saved product, source="custom"
+    """
+    description = food.description.strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="Product name is required")
+
+    with get_session() as session:
+        db_food = UserFood(
+            description=description,
+            calories_kcal=food.calories_kcal,
+            protein_g=food.protein_g,
+            carbs_g=food.carbs_g,
+            fat_g=food.fat_g,
+        )
+        session.add(db_food)
+        session.commit()
+        session.refresh(db_food)
+
+        return FoodSearchResult(
+            id=db_food.id,
+            description=db_food.description,
+            calories_kcal=db_food.calories_kcal,
+            protein_g=db_food.protein_g,
+            carbs_g=db_food.carbs_g,
+            fat_g=db_food.fat_g,
+            source="custom",
+        )
 
 
 # ========== Meal Models ==========
 class MealFoodItemCreate(BaseModel):
     """A single food item to add to a meal, with macros already scaled to the eaten portion."""
+    id: Optional[int] = None  # existing FoodItem id, for updates; omitted/None means "create new"
     fdc_id: Optional[int] = None
     name: str
     grams: float
@@ -733,6 +895,190 @@ async def get_meals():
         return result
 
 
+# ========== Meal Detail Endpoints ==========
+@app.get("/meals/{meal_id}", response_model=MealResponse)
+async def get_meal(meal_id: int):
+    """
+    Get one meal with all food items and totals.
+
+    Args:
+        meal_id: The ID of the meal to retrieve
+
+    Returns:
+        MealResponse: The meal with its items and computed totals
+    """
+    with get_session() as session:
+        db_meal = session.query(Meal).filter(Meal.id == meal_id).first()
+        if not db_meal:
+            raise HTTPException(status_code=404, detail="Meal not found")
+
+        items = session.query(FoodItemModel).filter(
+            FoodItemModel.meal_id == meal_id
+        ).all()
+
+        items_response = [
+            MealFoodItemResponse(
+                id=item.id,
+                fdc_id=item.fdc_id,
+                name=item.name,
+                grams=item.quantity,
+                calories=item.calories,
+                protein_g=item.protein_g,
+                carbs_g=item.carbs_g,
+                fat_g=item.fat_g,
+                source=item.source,
+            )
+            for item in items
+        ]
+
+        return MealResponse(
+            id=db_meal.id,
+            name=db_meal.name,
+            meal_date=db_meal.meal_date.isoformat(),
+            items=items_response,
+            total_calories=sum(i.calories or 0 for i in items),
+            total_protein_g=sum(i.protein_g or 0 for i in items),
+            total_carbs_g=sum(i.carbs_g or 0 for i in items),
+            total_fat_g=sum(i.fat_g or 0 for i in items),
+        )
+
+
+@app.patch("/meals/{meal_id}", response_model=MealResponse)
+async def update_meal(meal_id: int, meal_update: MealCreate):
+    """
+    Update a meal (including adding/removing/changing food items).
+
+    Args:
+        meal_id: The ID of the meal to update
+        meal_update: MealCreate model with new data
+
+    Returns:
+        MealResponse: The updated meal record
+    """
+    with get_session() as session:
+        db_meal = session.query(Meal).filter(Meal.id == meal_id).first()
+        if not db_meal:
+            raise HTTPException(status_code=404, detail="Meal not found")
+
+        # Update meal name/date if provided
+        if meal_update.name is not None:
+            db_meal.name = meal_update.name
+        if meal_update.meal_date:
+            try:
+                db_meal.meal_date = date.fromisoformat(meal_update.meal_date)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="meal_date must be YYYY-MM-DD")
+
+        session.commit()
+
+        # Handle updating food items
+        if meal_update.items is not None:
+            kept_item_ids = set()
+            for item_data in meal_update.items:
+                db_item = None
+                if item_data.id is not None:
+                    db_item = session.query(FoodItemModel).filter(
+                        FoodItemModel.id == item_data.id,
+                        FoodItemModel.meal_id == meal_id
+                    ).first()
+
+                if db_item is None:
+                    # Create new item
+                    db_item = FoodItemModel(
+                        meal_id=meal_id,
+                        name=item_data.name,
+                        quantity=item_data.grams,
+                        unit="g",
+                        calories=item_data.calories,
+                        protein_g=item_data.protein_g,
+                        carbs_g=item_data.carbs_g,
+                        fat_g=item_data.fat_g,
+                        source="search",
+                        fdc_id=item_data.fdc_id,
+                    )
+                    session.add(db_item)
+                else:
+                    # Update existing item
+                    db_item.name = item_data.name
+                    db_item.quantity = item_data.grams
+                    db_item.calories = item_data.calories
+                    db_item.protein_g = item_data.protein_g
+                    db_item.carbs_g = item_data.carbs_g
+                    db_item.fat_g = item_data.fat_g
+                    db_item.fdc_id = item_data.fdc_id
+
+                session.commit()
+                session.refresh(db_item)
+                kept_item_ids.add(db_item.id)
+
+            # Remove items that are no longer present
+            session.query(FoodItemModel).filter(
+                FoodItemModel.meal_id == meal_id,
+                FoodItemModel.id.not_in(kept_item_ids)
+            ).delete(synchronize_session=False)
+            session.commit()
+
+        # Re-fetch items for response
+        items = session.query(FoodItemModel).filter(
+            FoodItemModel.meal_id == meal_id
+        ).all()
+
+        items_response = [
+            MealFoodItemResponse(
+                id=item.id,
+                fdc_id=item.fdc_id,
+                name=item.name,
+                grams=item.quantity,
+                calories=item.calories,
+                protein_g=item.protein_g,
+                carbs_g=item.carbs_g,
+                fat_g=item.fat_g,
+                source=item.source,
+            )
+            for item in items
+        ]
+
+        return MealResponse(
+            id=db_meal.id,
+            name=db_meal.name,
+            meal_date=db_meal.meal_date.isoformat(),
+            items=items_response,
+            total_calories=sum(i.calories or 0 for i in items),
+            total_protein_g=sum(i.protein_g or 0 for i in items),
+            total_carbs_g=sum(i.carbs_g or 0 for i in items),
+            total_fat_g=sum(i.fat_g or 0 for i in items),
+        )
+
+
+@app.delete("/meals/{meal_id}")
+async def delete_meal(meal_id: int):
+    """
+    Delete a meal and all its food items.
+
+    Args:
+        meal_id: The ID of the meal to delete
+
+    Returns:
+        dict: Success message
+    """
+    with get_session() as session:
+        meal = session.query(Meal).filter(Meal.id == meal_id).first()
+        if not meal:
+            raise HTTPException(status_code=404, detail="Meal not found")
+
+        # Delete food items first
+        session.query(FoodItemModel).filter(
+            FoodItemModel.meal_id == meal_id
+        ).delete(synchronize_session=False)
+
+        # Delete the meal
+        session.delete(meal)
+        session.commit()
+
+        return {"message": "Meal deleted successfully"}
+
+
+@app.delete("/workouts/{workout_id}")
 async def delete_workout(workout_id: int):
     """
     Delete a workout and all its exercises/sets.

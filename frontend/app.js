@@ -138,6 +138,7 @@ const timer = {
 
 // Active workout state
 let activeWorkout = null;
+let activeMeal = null; // { id, isPastEdit } while editing a past meal in the meal builder
 let exercisesData = [];
 let currentExerciseNameFilter = '';
 
@@ -1504,9 +1505,12 @@ document.addEventListener('DOMContentLoaded', () => {
             ">Delete</button>
         `;
         
+        // menu.style.position is 'fixed', which is already viewport-relative -
+        // do NOT add window.scrollY/scrollX here, or the menu drifts further
+        // off-screen the more the page has been scrolled.
         const rect = event.currentTarget.getBoundingClientRect();
-        const top = rect.bottom + window.scrollY;
-        const left = rect.left + window.scrollX;
+        const top = rect.bottom;
+        const left = rect.left;
         
         menu.style.top = `${top}px`;
         menu.style.left = `${left}px`;
@@ -1641,268 +1645,59 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ========== Food Photo Analysis Functionality ==========
 const foodPhoto = {
-    /** Current photo data being processed */
-    currentPhoto: null,
-    
-    /** Current analysis results */
-    results: [],
-    
     /**
-     * Initialize food photo capture functionality
+     * Initialize food photo capture functionality. Capture opens the native
+     * camera via a plain file input (same pattern as "Add a new product"'s
+     * label photo) - no custom camera/canvas overlay, since that path had a
+     * bug (canvas sized before the video stream loaded) that produced
+     * invalid 0x0 images and an unwanted mirror effect on the back camera.
      */
     init() {
-        // Capture button
         const captureBtn = document.getElementById('capture-photo-btn');
-        if (captureBtn) {
-            captureBtn.addEventListener('click', () => this.startCamera());
-        }
-        
-        // Photo input change handler
         const photoInput = document.getElementById('photo-input');
+
+        if (captureBtn && photoInput) {
+            captureBtn.addEventListener('click', () => photoInput.click());
+        }
+
         if (photoInput) {
             photoInput.addEventListener('change', async (e) => await this.handleFileSelect(e));
         }
-        
-        // Clear results button
-        const clearBtn = document.getElementById('clear-results-btn');
-        if (clearBtn) {
-            clearBtn.addEventListener('click', () => this.clearResults());
-        }
-        
-        // Save meal button
-        const saveBtn = document.getElementById('save-meal-btn');
-        if (saveBtn) {
-            saveBtn.addEventListener('click', () => this.saveMeal());
-        }
-        
-        // Stop camera when switching away from Food tab
-        document.addEventListener('tabSwitch', () => this.stopCamera());
     },
-    
+
     /**
-     * Start camera for real-time capture
+     * Handle selected/captured file
      */
-    async startCamera() {
-        try {
-            // Stop any existing camera stream
-            this.stopCamera();
-            
-            // Request camera access
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'environment' } // Use back camera on mobile
-            });
-            
-            this.cameraStream = stream;
-            
-            // Create video element for preview (hidden)
-            const video = document.createElement('video');
-            video.srcObject = stream;
-            video.play();
-            
-            // Create a canvas to capture the image
-            const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext('2d');
-            
-            // Show capture UI overlay
-            this.showCaptureOverlay(canvas, video);
-            
-        } catch (error) {
-            console.error('Error accessing camera:', error);
-            alert('Could not access camera. Please allow camera permissions and try again.');
+    async handleFileSelect(event) {
+        const file = event.target.files[0];
+        if (!file || !file.type.startsWith('image/')) {
+            return;
         }
+
+        await this.handlePhotoFile(file);
+
+        // Reset the file input so selecting the same file again still fires 'change'
+        event.target.value = '';
     },
-    
+
     /**
-     * Stop the camera
-     */
-    stopCamera() {
-        if (this.cameraStream) {
-            this.cameraStream.getTracks().forEach(track => track.stop());
-            this.cameraStream = null;
-        }
-        
-        // Remove capture overlay if it exists
-        const overlay = document.getElementById('camera-overlay');
-        if (overlay) {
-            overlay.remove();
-        }
-    },
-    
-    /**
-     * Show capture overlay with camera preview
-     */
-    showCaptureOverlay(canvas, video) {
-        // Remove existing overlay if present
-        const existing = document.getElementById('camera-overlay');
-        if (existing) existing.remove();
-        
-        // Create overlay container
-        const overlay = document.createElement('div');
-        overlay.id = 'camera-overlay';
-        overlay.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.95);
-            z-index: 2000;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 1rem;
-        `;
-        
-        // Video preview container
-        const videoContainer = document.createElement('div');
-        videoContainer.style.cssText = 'width: 100%; max-width: 600px; margin-bottom: 1rem;';
-        
-        // Create visible video element
-        const previewVideo = document.createElement('video');
-        previewVideo.autoplay = true;
-        previewVideo.playsInline = true;
-        previewVideo.srcObject = this.cameraStream;
-        previewVideo.style.cssText = 'width: 100%; border-radius: 12px; transform: scaleX(-1);';
-        
-        // For Safari compatibility
-        if (previewVideo.play) {
-            previewVideo.play().catch(e => console.log('Preview play error:', e));
-        }
-        
-        videoContainer.appendChild(previewVideo);
-        
-        // Capture button container
-        const captureContainer = document.createElement('div');
-        captureContainer.style.cssText = 'display: flex; gap: 1rem; margin-top: 1.5rem;';
-        
-        // Capture button (circular)
-        const captureBtn = document.createElement('button');
-        captureBtn.style.cssText = `
-            width: 70px;
-            height: 70px;
-            border-radius: 50%;
-            border: 4px solid white;
-            background: transparent;
-            cursor: pointer;
-            padding: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        `;
-        
-        const captureInner = document.createElement('div');
-        captureInner.style.cssText = 'width: 62px; height: 62px; border-radius: 50%; background: white;';
-        captureBtn.appendChild(captureInner);
-        
-        // Cancel button
-        const cancelBtn = document.createElement('button');
-        cancelBtn.textContent = 'Cancel';
-        cancelBtn.className = 'btn btn-secondary';
-        cancelBtn.style.cssText = 'width: auto; padding: 0.5rem 1.5rem;';
-        
-        // Take photo button
-        const takePhotoBtn = document.createElement('button');
-        takePhotoBtn.textContent = '✓ Take Photo';
-        takePhotoBtn.className = 'btn';
-        takePhotoBtn.style.cssText = 'width: auto; padding: 0.5rem 1.5rem;';
-        
-        // Close button (top right)
-        const closeBtn = document.createElement('button');
-        closeBtn.innerHTML = '×';
-        closeBtn.style.cssText = `
-            position: absolute;
-            top: 1rem;
-            right: 1rem;
-            background: none;
-            border: none;
-            color: white;
-            font-size: 2rem;
-            cursor: pointer;
-        `;
-        
-        // Event handlers
-        closeBtn.onclick = () => this.stopCamera();
-        cancelBtn.onclick = () => this.stopCamera();
-        
-        takePhotoBtn.onclick = async () => {
-            try {
-                // Draw current video frame to canvas
-                const ctx = canvas.getContext('2d');
-                
-                // Flip the image horizontally (mirror effect)
-                ctx.translate(canvas.width, 0);
-                ctx.scale(-1, 1);
-                ctx.drawImage(previewVideo, 0, 0, canvas.width, canvas.height);
-                
-                // Convert to blob
-                const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
-                const file = new File([blob], `camera_capture_${Date.now()}.jpg`, {
-                    type: 'image/jpeg'
-                });
-                
-                // Stop camera and process the photo
-                this.stopCamera();
-                await this.handlePhotoFile(file);
-                
-            } catch (error) {
-                console.error('Error capturing photo:', error);
-                alert('Failed to capture photo');
-            }
-        };
-        
-        // Build overlay
-        closeBtn.onclick = () => this.stopCamera();
-        cancelBtn.onclick = () => this.stopCamera();
-        
-        captureContainer.appendChild(cancelBtn);
-        captureContainer.appendChild(takePhotoBtn);
-        
-        overlay.appendChild(closeBtn);
-        overlay.appendChild(videoContainer);
-        overlay.appendChild(captureContainer);
-        document.body.appendChild(overlay);
-    },
-    
-    /**
-     * Handle photo file (from capture or file picker)
+     * Analyze the photo, then hand identified items off to the shared meal
+     * builder (same one "Add Meal" uses) so the user can review, adjust
+     * portions, and save exactly like a manually-searched meal.
      */
     async handlePhotoFile(file) {
         if (!file || !file.type.startsWith('image/')) {
             return;
         }
-        
-        this.currentPhoto = file;
-        
-        // Show loading indicator
+
         const loadingIndicator = document.getElementById('loading-indicator');
-        if (loadingIndicator) {
-            loadingIndicator.style.display = 'block';
-        }
-        
-        // Hide results list while analyzing
-        const foodItemsList = document.getElementById('food-items-list');
-        if (foodItemsList) {
-            foodItemsList.innerHTML = '';
-        }
-        
-        // Hide analysis results until we get the data
-        const analysisResults = document.getElementById('analysis-results');
-        if (analysisResults) {
-            analysisResults.style.display = 'none';
-        }
-        
+        if (loadingIndicator) loadingIndicator.style.display = 'block';
+
         try {
-            // Analyze photo with backend
             const result = await this.analyzePhoto(file);
-            
+
             if (result && result.items && result.items.length > 0) {
-                this.results = result.items;
-                
-                // Display results
-                this.displayResults(result);
+                await this.addIdentifiedItemsToMeal(result.items);
             } else {
                 alert('No food items were identified in the photo. Please try again with a clearer image.');
             }
@@ -1910,55 +1705,45 @@ const foodPhoto = {
             console.error('Error analyzing photo:', error);
             alert('Failed to analyze photo. Make sure LM Studio is running on http://localhost:3142');
         } finally {
-            // Hide loading indicator
-            if (loadingIndicator) {
-                loadingIndicator.style.display = 'none';
-            }
+            if (loadingIndicator) loadingIndicator.style.display = 'none';
         }
     },
-    
-    /**
-     * Handle selected file (from file picker)
-     */
-    async handleFileSelect(event) {
-        const file = event.target.files[0];
-        if (!file || !file.type.startsWith('image/')) {
-            return;
-        }
-        
-        await this.handlePhotoFile(file);
-        
-        // Reset the file input
-        event.target.value = '';
-    },
-    
+
     /**
      * Analyze photo using backend API
      */
     async analyzePhoto(file) {
+        // iOS Safari bug workaround: a freshly-captured camera photo's File
+        // object can serialize as an empty (Content-Length: 0) upload body
+        // when handed straight to FormData/fetch, even though file.size
+        // looks correct. Reading it into memory first forces the data to
+        // fully materialize before the request is built.
+        const arrayBuffer = await file.arrayBuffer();
+        const photoBlob = new Blob([arrayBuffer], { type: file.type || 'image/jpeg' });
+
         const formData = new FormData();
-        formData.append('photo', file);
-        
+        formData.append('photo', photoBlob, file.name || 'photo.jpg');
+
         try {
             // Build URL using window.location.origin (backend API)
             const response = await fetch(`${window.location.origin}/meals/photo`, {
                 method: 'POST',
                 body: formData
             });
-            
+
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
-            
+
             return await response.json();
         } catch (error) {
             console.error('Photo analysis error:', error);
-            
+
             // Check if it's a network error (LM Studio not available)
             if (!navigator.onLine) {
                 throw new Error('No internet connection. LM Studio may not be accessible.');
             }
-            
+
             // Try to get error details from response
             try {
                 const errorData = await response.json();
@@ -1969,101 +1754,57 @@ const foodPhoto = {
             }
         }
     },
-    
+
     /**
-     * Display analysis results
+     * Match each identified item (name + estimated_portion_g) against the
+     * local food database via the same /foods/search used by manual entry,
+     * and load matches into a fresh meal in foodSearch's builder - the
+     * vision model only identifies food and estimates portion size (per
+     * SPEC); actual macros always come from the local database, never the
+     * model. The user reviews/adjusts everything (including swapping a
+     * wrong match) before saving.
      */
-    displayResults(result) {
-        const foodItemsList = document.getElementById('food-items-list');
-        if (!foodItemsList) return;
-        
-        // Show analysis results section
-        const analysisResults = document.getElementById('analysis-results');
-        if (analysisResults) {
-            analysisResults.style.display = 'block';
-        }
-        
-        // Render each food item
-        const itemsHtml = result.items.map((item, index) => `
-            <div class="card" style="margin-bottom: 0.75rem;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <strong>${this.escapeHtml(item.name)}</strong>
-                    <span style="color: #666;">${item.estimated_portion_g} g</span>
-                </div>
-            </div>
-        `).join('');
-        
-        foodItemsList.innerHTML = itemsHtml;
-    },
-    
-    /**
-     * Escape HTML to prevent XSS
-     */
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    },
-    
-    /**
-     * Clear results and reset UI
-     */
-    clearResults() {
-        this.currentPhoto = null;
-        this.results = [];
-        
-        const analysisResults = document.getElementById('analysis-results');
-        if (analysisResults) {
-            analysisResults.style.display = 'none';
-        }
-        
-        const foodItemsList = document.getElementById('food-items-list');
-        if (foodItemsList) {
-            foodItemsList.innerHTML = '';
-        }
-        
-        const loadingIndicator = document.getElementById('loading-indicator');
-        if (loadingIndicator) {
-            loadingIndicator.style.display = 'none';
-        }
-        
-        // Reset photo input
-        const photoInput = document.getElementById('photo-input');
-        if (photoInput) {
-            photoInput.value = '';
-        }
-    },
-    
-    /**
-     * Save meal to database
-     */
-    async saveMeal() {
-        if (!this.results || this.results.length === 0) {
-            alert('No food items to save.');
-            return;
-        }
-        
-        try {
-            const formData = new FormData();
-            
-            // Add each food item as JSON
-            formData.append('items', JSON.stringify(this.results));
-            
-            if (this.currentPhoto) {
-                formData.append('photo', this.currentPhoto);
+    async addIdentifiedItemsToMeal(items) {
+        foodSearch.openMealBuilder();
+
+        const unmatched = [];
+        for (const item of items) {
+            try {
+                const results = await api.get(`/foods/search?q=${encodeURIComponent(item.name)}`);
+                if (results && results.length > 0) {
+                    const food = results[0];
+                    foodSearch.items.push({
+                        fdc_id: food.id,
+                        name: food.description,
+                        grams: item.estimated_portion_g,
+                        per100: {
+                            calories: food.calories_kcal,
+                            protein_g: food.protein_g,
+                            carbs_g: food.carbs_g,
+                            fat_g: food.fat_g,
+                        },
+                    });
+                } else {
+                    unmatched.push(item.name);
+                }
+            } catch (error) {
+                console.error('Error matching identified food to the local database:', item.name, error);
+                unmatched.push(item.name);
             }
-            
-            // For now, we just confirm the items were analyzed
-            // The full meal saving would involve creating a Meal record in the database
-            
-            alert(`Meal saved! ${this.results.length} food item(s) identified and estimated.` + 
-                  '\n\nFull meal saving functionality would be implemented in the next step.');
-            
-            // Clear results after save
-            this.clearResults();
-        } catch (error) {
-            console.error('Error saving meal:', error);
-            alert('Failed to save meal');
+        }
+
+        foodSearch.renderMeal();
+
+        const section = document.getElementById('search-meal-section');
+        if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+        if (unmatched.length > 0) {
+            const matchedCount = items.length - unmatched.length;
+            alert(
+                `Added ${matchedCount} of ${items.length} identified item(s) to your meal.\n\n` +
+                `Couldn't find nutrition data for: ${unmatched.join(', ')}. ` +
+                `Add ${unmatched.length === 1 ? 'it' : 'them'} manually via "Add Food" if needed.`
+            );
         }
     }
 };
@@ -2106,10 +1847,11 @@ const foodSearch = {
     },
 
     /**
-     * Open the meal builder: show the meal type/date fields and the (empty)
-     * item list, and hide the "Add Meal" entry point.
+     * Open the meal builder for a brand new meal: show the meal type/date
+     * fields and the (empty) item list, and hide the "Add Meal" entry point.
      */
     openMealBuilder() {
+        activeMeal = null;
         this.items = [];
 
         const addMealCard = document.getElementById('add-meal-card');
@@ -2117,6 +1859,12 @@ const foodSearch = {
 
         const section = document.getElementById('search-meal-section');
         if (section) section.style.display = 'block';
+
+        const titleEl = document.getElementById('meal-builder-title');
+        if (titleEl) titleEl.textContent = 'New Meal';
+
+        const saveBtn = document.getElementById('save-search-meal-btn');
+        if (saveBtn) saveBtn.textContent = 'Save Meal';
 
         const dateInput = document.getElementById('meal-date-input');
         if (dateInput) {
@@ -2132,9 +1880,10 @@ const foodSearch = {
     },
 
     /**
-     * Close the meal builder without saving, discarding any added items.
+     * Close the meal builder without saving, discarding any added/edited items.
      */
     closeMealBuilder() {
+        activeMeal = null;
         this.items = [];
 
         const section = document.getElementById('search-meal-section');
@@ -2172,6 +1921,7 @@ const foodSearch = {
             max-height: 80vh;
             display: flex;
             flex-direction: column;
+            overflow: hidden;
         `;
 
         const header = document.createElement('div');
@@ -2200,10 +1950,29 @@ const foodSearch = {
         header.appendChild(title);
         header.appendChild(searchInput);
 
+        // Search results view (default)
+        const searchView = document.createElement('div');
+        searchView.id = 'food-search-view';
+        searchView.style.cssText = 'display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden;';
+
         const list = document.createElement('div');
         list.id = 'food-search-results';
-        list.style.cssText = 'padding: 0.5rem; overflow-y: auto; flex: 1;';
+        list.style.cssText = 'padding: 0.5rem; overflow-y: auto; flex: 1; min-height: 0;';
         list.innerHTML = '<p style="color: #888; text-align: center; padding: 1rem;">Start typing to search</p>';
+
+        const addProductBtn = document.createElement('button');
+        addProductBtn.textContent = "+ Add a new product";
+        addProductBtn.className = 'btn btn-secondary';
+        addProductBtn.style.cssText = 'margin: 0.5rem; width: calc(100% - 1rem);';
+        addProductBtn.addEventListener('click', () => this.showAddProductView());
+
+        searchView.appendChild(list);
+        searchView.appendChild(addProductBtn);
+
+        // Add-a-new-product view (hidden until "+ Add a new product" is clicked)
+        const addView = document.createElement('div');
+        addView.id = 'food-add-product-view';
+        addView.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; padding: 1rem;';
 
         const footer = document.createElement('div');
         footer.style.cssText = 'padding: 1rem; border-top: 1px solid #eee;';
@@ -2215,7 +1984,8 @@ const foodSearch = {
         footer.appendChild(closeBtn);
 
         content.appendChild(header);
-        content.appendChild(list);
+        content.appendChild(searchView);
+        content.appendChild(addView);
         content.appendChild(footer);
         modal.appendChild(content);
         document.body.appendChild(modal);
@@ -2263,7 +2033,10 @@ const foodSearch = {
 
         list.innerHTML = results.map((food, index) => `
             <div class="food-search-result" data-index="${index}" style="padding: 0.75rem; border-bottom: 1px solid #f0f0f0; cursor: pointer;">
-                <div style="font-weight: bold; color: #1a1a2e;">${this.escapeHtml(food.description)}</div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem;">
+                    <div style="font-weight: bold; color: #1a1a2e;">${this.escapeHtml(food.description)}</div>
+                    <span style="flex-shrink: 0; font-size: 0.65rem; padding: 0.15rem 0.4rem; border-radius: 4px; color: white; white-space: nowrap; background: ${food.source === 'custom' ? '#e94560' : '#1a1a2e'};">${food.source === 'custom' ? 'YOURS' : 'USDA'}</span>
+                </div>
                 <div style="font-size: 0.8rem; color: #666; margin-top: 0.25rem;">
                     ${Math.round(food.calories_kcal)} kcal · ${food.protein_g.toFixed(1)}g P · ${food.carbs_g.toFixed(1)}g C · ${food.fat_g.toFixed(1)}g F
                     <span style="color: #999;">(per 100g)</span>
@@ -2310,6 +2083,202 @@ const foodSearch = {
         if (modal) modal.remove();
 
         this.renderMeal();
+    },
+
+    /**
+     * Switch the search modal to the "add a new product" view: a photo
+     * capture input plus a review form, for when a search doesn't find
+     * the product the user wants.
+     */
+    showAddProductView() {
+        const searchView = document.getElementById('food-search-view');
+        const addView = document.getElementById('food-add-product-view');
+        if (searchView) searchView.style.display = 'none';
+        if (addView) addView.style.display = 'flex';
+        if (!addView) return;
+
+        addView.innerHTML = `
+            <button id="back-to-search-btn" style="align-self: flex-start; background: none; border: none; color: #666; cursor: pointer; font-size: 0.9rem; margin-bottom: 0.75rem; padding: 0;">← Back to search</button>
+            <p style="font-size: 0.9rem; color: #666; margin-bottom: 0.75rem;">Take a photo of the product's nutrition label to fill in the details, or enter them manually below.</p>
+            <input type="file" id="label-photo-input" accept="image/*" capture="environment" style="margin-bottom: 0.5rem;">
+            <div id="label-scan-status" style="font-size: 0.85rem; color: #666; margin-bottom: 0.75rem;"></div>
+            <div id="add-product-form"></div>
+        `;
+
+        document.getElementById('back-to-search-btn').addEventListener('click', () => this.showSearchView());
+        document.getElementById('label-photo-input').addEventListener('change', (e) => this.handleLabelPhoto(e));
+
+        // Blank form is ready immediately, so manual entry works with no photo at all
+        this.renderAddProductForm({});
+    },
+
+    /**
+     * Return to the search results view from the add-product view
+     */
+    showSearchView() {
+        const searchView = document.getElementById('food-search-view');
+        const addView = document.getElementById('food-add-product-view');
+        if (addView) addView.style.display = 'none';
+        if (searchView) searchView.style.display = 'flex';
+    },
+
+    /**
+     * Upload the captured label photo to POST /foods/label-scan and
+     * pre-fill the review form with whatever was extracted. Never treats a
+     * failed/empty scan as an error - falls back to a blank form either way.
+     */
+    async handleLabelPhoto(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const statusEl = document.getElementById('label-scan-status');
+
+        // Guard against a picked-but-empty file (e.g. the camera hand-off
+        // getting interrupted) - uploading it would just come back empty,
+        // so fail fast with a message that points at retaking the photo
+        // rather than the more general "couldn't read it" wording.
+        if (file.size === 0) {
+            console.error('Label photo has 0 bytes - the file was not captured properly.');
+            if (statusEl) statusEl.textContent = 'No photo was captured — please try again.';
+            return;
+        }
+
+        if (statusEl) statusEl.textContent = 'Reading label…';
+
+        try {
+            // iOS Safari bug workaround: a freshly-captured camera photo's
+            // File object can report a correct non-zero size yet still
+            // serialize as an empty (Content-Length: 0) body when handed
+            // straight to FormData/fetch - the underlying blob data isn't
+            // always materialized yet right after capture. Explicitly
+            // reading it into memory first and uploading that forces it to
+            // fully load before the request is built.
+            const arrayBuffer = await file.arrayBuffer();
+            if (arrayBuffer.byteLength === 0) {
+                console.error('Label photo read as 0 bytes even after arrayBuffer() - camera capture did not produce data.');
+                if (statusEl) statusEl.textContent = 'No photo was captured — please try again.';
+                return;
+            }
+            const photoBlob = new Blob([arrayBuffer], { type: file.type || 'image/jpeg' });
+
+            const formData = new FormData();
+            formData.append('photo', photoBlob, file.name || 'label.jpg');
+
+            const response = await fetch(`${window.location.origin}/foods/label-scan`, {
+                method: 'POST',
+                body: formData,
+                cache: 'no-store',
+            });
+            if (!response.ok) {
+                const bodyText = await response.text().catch(() => '');
+                throw new Error(`HTTP ${response.status}: ${bodyText}`);
+            }
+            const extracted = await response.json();
+
+            const gotAnything = extracted.product_name || extracted.calories_kcal !== null;
+            if (statusEl) {
+                statusEl.textContent = gotAnything
+                    ? 'Extracted from the label — review and correct before saving.'
+                    : "Couldn't read anything on the label — enter the details manually.";
+            }
+            this.renderAddProductForm(extracted);
+        } catch (error) {
+            // A network/HTTP-level failure (e.g. the upload never reached the
+            // server) is a different problem than the model finding nothing on
+            // a legible photo - say so, since "couldn't read the label" reads
+            // as a label-quality issue when it might really be a connection one.
+            console.error('Label scan request failed:', error);
+            if (statusEl) statusEl.textContent = "Upload failed — check your connection and try again, or enter the details manually.";
+            this.renderAddProductForm({});
+        }
+    },
+
+    /**
+     * Render the editable product review form, pre-filled from a label scan
+     * (if any). Macros are converted to per-100g using the extracted serving
+     * size; every field stays editable so the user always reviews/corrects
+     * before saving (mirrors the meal-photo pipeline's "always a draft" rule).
+     */
+    renderAddProductForm(extracted) {
+        const formEl = document.getElementById('add-product-form');
+        if (!formEl) return;
+
+        const scale100 = (value) => {
+            if (value === null || value === undefined) return '';
+            if (!extracted.serving_size_g || extracted.serving_size_g <= 0) return value;
+            return Math.round(value * (100 / extracted.serving_size_g) * 100) / 100;
+        };
+
+        const name = extracted.product_name || '';
+        const calories = scale100(extracted.calories_kcal);
+        const protein = scale100(extracted.protein_g);
+        const carbs = scale100(extracted.carbs_g);
+        const fat = scale100(extracted.fat_g);
+        const fieldStyle = 'width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.5rem;';
+        const labelStyle = 'font-size: 0.85rem; color: #666;';
+
+        formEl.innerHTML = `
+            <label style="${labelStyle}">Product name</label>
+            <input type="text" id="product-name-input" value="${this.escapeHtml(String(name))}" style="${fieldStyle}">
+
+            <p style="font-size: 0.8rem; color: #999; margin-bottom: 0.5rem;">
+                Per 100g${extracted.serving_size_g ? ` (converted from a ${extracted.serving_size_g}g serving)` : ''}:
+            </p>
+
+            <label style="${labelStyle}">Calories (kcal)</label>
+            <input type="number" step="any" id="product-calories-input" value="${calories}" style="${fieldStyle}">
+
+            <label style="${labelStyle}">Protein (g)</label>
+            <input type="number" step="any" id="product-protein-input" value="${protein}" style="${fieldStyle}">
+
+            <label style="${labelStyle}">Carbs (g)</label>
+            <input type="number" step="any" id="product-carbs-input" value="${carbs}" style="${fieldStyle}">
+
+            <label style="${labelStyle}">Fat (g)</label>
+            <input type="number" step="any" id="product-fat-input" value="${fat}" style="${fieldStyle}">
+
+            <button id="save-product-btn" class="btn" style="margin-top: 0.5rem;">Save Product</button>
+        `;
+
+        document.getElementById('save-product-btn').addEventListener('click', () => this.saveCustomProduct());
+    },
+
+    /**
+     * Save the reviewed product via POST /foods/custom, then treat it exactly
+     * like picking a normal search result: prompt for a portion and add it
+     * to the meal being built.
+     */
+    async saveCustomProduct() {
+        const nameInput = document.getElementById('product-name-input');
+        const name = nameInput ? nameInput.value.trim() : '';
+        if (!name) {
+            alert('Please enter a product name.');
+            return;
+        }
+
+        const toNum = (id) => {
+            const el = document.getElementById(id);
+            const value = el ? parseFloat(el.value) : NaN;
+            return isNaN(value) ? 0 : value;
+        };
+
+        const payload = {
+            description: name,
+            calories_kcal: toNum('product-calories-input'),
+            protein_g: toNum('product-protein-input'),
+            carbs_g: toNum('product-carbs-input'),
+            fat_g: toNum('product-fat-input'),
+        };
+
+        try {
+            const newFood = await api.post('/foods/custom', payload);
+            const modal = document.getElementById('food-search-modal');
+            if (modal) modal.remove();
+            this.selectFood(newFood);
+        } catch (error) {
+            console.error('Error saving product:', error);
+            alert('Failed to save product');
+        }
     },
 
     /**
@@ -2422,7 +2391,10 @@ const foodSearch = {
     },
 
     /**
-     * Save the meal being built to the backend via POST /meals
+     * Save the meal being built. Creates a new meal via POST /meals, or if
+     * we're editing a past meal (activeMeal.isPastEdit), updates it in place
+     * via PATCH /meals/{id} instead - same create-vs-update split as the
+     * workout "Finish"/"Save" button.
      */
     async saveMeal() {
         if (this.items.length === 0) {
@@ -2439,6 +2411,7 @@ const foodSearch = {
             items: this.items.map((item) => {
                 const macros = this.computeMacros(item);
                 return {
+                    id: item.id,
                     fdc_id: item.fdc_id,
                     name: item.name,
                     grams: item.grams,
@@ -2451,8 +2424,13 @@ const foodSearch = {
         };
 
         try {
-            await api.post('/meals', payload);
-            alert(`Meal saved! ${this.items.length} food item(s).`);
+            if (activeMeal && activeMeal.isPastEdit) {
+                await api.patch(`/meals/${activeMeal.id}`, payload);
+                alert('Meal updated!');
+            } else {
+                await api.post('/meals', payload);
+                alert(`Meal saved! ${this.items.length} food item(s).`);
+            }
             this.closeMealBuilder();
             this.loadSavedMeals();
         } catch (error) {
@@ -2491,19 +2469,335 @@ const foodSearch = {
 
         listEl.className = '';
         listEl.innerHTML = meals.map((meal) => `
-            <div class="card" style="margin-bottom: 0.75rem;">
-                <div style="display: flex; justify-content: space-between; align-items: baseline;">
-                    <strong>${this.escapeHtml(meal.name)}</strong>
-                    <span style="font-size: 0.8rem; color: #666;">${this.escapeHtml(meal.meal_date)}</span>
+            <div class="history-card" onclick="foodSearch.showHistoryDetail(${meal.id})">
+                <div class="history-card-header">
+                    <span class="history-card-name">${this.escapeHtml(meal.name)}</span>
+                    <button class="history-menu-btn" onclick="event.stopPropagation(); foodSearch.showMealMenu(${meal.id}, event)">☰</button>
                 </div>
-                <div style="font-size: 0.85rem; color: #666; margin-top: 0.25rem;">
+                <div class="history-card-date">${this.formatDate(meal.meal_date)}</div>
+                <div style="font-size: 0.85rem; color: #666; margin-bottom: 0.5rem;">
                     ${meal.items.map((item) => this.escapeHtml(item.name)).join(', ')}
                 </div>
-                <div style="font-size: 0.85rem; margin-top: 0.5rem; font-weight: bold;">
+                <div style="font-size: 0.85rem; font-weight: bold;">
                     ${Math.round(meal.total_calories)} kcal · ${meal.total_protein_g.toFixed(1)}g P · ${meal.total_carbs_g.toFixed(1)}g C · ${meal.total_fat_g.toFixed(1)}g F
                 </div>
             </div>
         `).join('');
+    },
+
+    /**
+     * Format a date-only string (YYYY-MM-DD) for display. Parsed as local
+     * calendar date components (not via `new Date(dateStr)`, which reads a
+     * bare date as UTC midnight and can roll back a day in timezones behind UTC).
+     */
+    formatDate(dateStr) {
+        const [year, month, day] = dateStr.split('-').map(Number);
+        const date = new Date(year, month - 1, day);
+        return date.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+    },
+
+    /**
+     * Show meal menu (dropdown options) - same pattern as the workout menu (Edit/Delete)
+     */
+    showMealMenu(mealId, event) {
+        event.stopPropagation();
+        event.preventDefault();
+
+        const menu = document.createElement('div');
+        menu.style.cssText = `
+            position: fixed;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            padding: 0.5rem;
+            z-index: 1100;
+            min-width: 160px;
+        `;
+
+        menu.innerHTML = `
+            <button onclick="foodSearch.openHistoryMealEdit(${mealId}); this.closest('div').remove()" style="
+                width: 100%;
+                padding: 0.75rem;
+                text-align: left;
+                background: none;
+                border: none;
+                cursor: pointer;
+                font-size: 0.9rem;
+                color: #1a1a2e;
+            ">Edit</button>
+            <hr style="margin: 0.5rem 0; border: none; border-top: 1px solid #eee;">
+            <button onclick="foodSearch.copyMealToToday(${mealId}); this.closest('div').remove()" style="
+                width: 100%;
+                padding: 0.75rem;
+                text-align: left;
+                background: none;
+                border: none;
+                cursor: pointer;
+                font-size: 0.9rem;
+                color: #1a1a2e;
+            ">Copy to Today</button>
+            <hr style="margin: 0.5rem 0; border: none; border-top: 1px solid #eee;">
+            <button onclick="foodSearch.deleteMeal(${mealId}); this.closest('div').remove()" style="
+                width: 100%;
+                padding: 0.75rem;
+                text-align: left;
+                background: none;
+                border: none;
+                cursor: pointer;
+                font-size: 0.9rem;
+                color: #dc3545;
+            ">Delete</button>
+        `;
+
+        // menu.style.position is 'fixed', which is already viewport-relative -
+        // do NOT add window.scrollY/scrollX here, or the menu drifts further
+        // off-screen the more the page has been scrolled.
+        const rect = event.currentTarget.getBoundingClientRect();
+        const top = rect.bottom;
+        const left = rect.left;
+
+        menu.style.top = `${top}px`;
+        menu.style.left = `${left}px`;
+
+        document.body.appendChild(menu);
+
+        // Close on click outside
+        const closeMenu = function() {
+            menu.remove();
+            document.removeEventListener('click', closeMenu);
+        };
+
+        setTimeout(() => {
+            document.addEventListener('click', closeMenu);
+        }, 10);
+    },
+
+    /**
+     * Show history detail view for a meal - read-only
+     */
+    async showHistoryDetail(mealId) {
+        try {
+            const meal = await api.get(`/meals/${mealId}`);
+
+            // Create panel container
+            const panel = document.createElement('div');
+            panel.className = 'meal-history-detail-panel';
+
+            // Build meal name
+            const mealName = (meal.name && meal.name.trim() !== '')
+                ? meal.name
+                : `Meal #${meal.id}`;
+
+            const date = new Date(meal.meal_date);
+
+            // Build food item rows
+            let itemsHtml = '';
+            if (meal.items && meal.items.length > 0) {
+                itemsHtml = meal.items.map((item, idx) => `
+                    <div class="meal-history-detail-food">
+                        <div class="meal-history-detail-food-name">${this.escapeHtml(item.name)}</div>
+                        <div class="meal-history-detail-food-grams">${item.grams} g</div>
+                        <div class="meal-history-detail-food-macros">
+                            ${Math.round(item.calories)} kcal · ${item.protein_g.toFixed(1)}g P · ${item.carbs_g.toFixed(1)}g C · ${item.fat_g.toFixed(1)}g F
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                itemsHtml = '<p style="color: #999;">No food items in this meal.</p>';
+            }
+
+            panel.innerHTML = `
+                <div class="meal-history-detail-header">
+                    <button class="meal-history-detail-close" onclick="this.closest('.meal-history-detail-panel').remove()">×</button>
+                    <div class="meal-history-detail-title">${mealName}</div>
+                    <div class="meal-history-detail-actions">
+                        <button onclick="foodSearch.copyMealToToday(${mealId}); this.closest('.meal-history-detail-panel').remove()" class="meal-history-detail-edit-btn" style="background: #1a1a2e;">Copy to Today</button>
+                        <button onclick="foodSearch.openHistoryMealEdit(${mealId}); this.closest('.meal-history-detail-panel').remove()" class="meal-history-detail-edit-btn">Edit</button>
+                    </div>
+                </div>
+
+                <div class="meal-history-detail-content">
+                    <div class="meal-history-detail-date">${this.formatDate(meal.meal_date)}</div>
+
+                    <div class="meal-history-detail-stats">
+                        <div class="meal-history-detail-stat" title="Total Calories">
+                            <span class="meal-history-detail-stat-icon">🔥</span>
+                            <span class="meal-history-detail-stat-value">${Math.round(meal.total_calories)} kcal</span>
+                        </div>
+                        <div class="meal-history-detail-stat" title="Total Protein">
+                            <span class="meal-history-detail-stat-icon">🍗</span>
+                            <span class="meal-history-detail-stat-value">${meal.total_protein_g.toFixed(1)}g</span>
+                        </div>
+                        <div class="meal-history-detail-stat" title="Total Carbs">
+                            <span class="meal-history-detail-stat-icon">🍞</span>
+                            <span class="meal-history-detail-stat-value">${meal.total_carbs_g.toFixed(1)}g</span>
+                        </div>
+                        <div class="meal-history-detail-stat" title="Total Fat">
+                            <span class="meal-history-detail-stat-icon">🧀</span>
+                            <span class="meal-history-detail-stat-value">${meal.total_fat_g.toFixed(1)}g</span>
+                        </div>
+                    </div>
+
+                    ${itemsHtml}
+                </div>
+            `;
+
+            document.body.appendChild(panel);
+        } catch (error) {
+            console.error('Error loading meal detail:', error);
+            alert('Failed to load meal details');
+        }
+    },
+
+    /**
+     * Open a past meal in the same builder UI used for adding a meal, so it
+     * can be edited (portions, add/remove foods) - mirrors openHistoryWorkoutEdit.
+     * Saving PATCHes this meal in place instead of creating a new one.
+     */
+    async openHistoryMealEdit(mealId) {
+        try {
+            const meal = await api.get(`/meals/${mealId}`);
+
+            activeMeal = { id: meal.id, isPastEdit: true };
+
+            // Copy items into foodSearch.items for editing. The API only
+            // returns each item's final (grams-scaled) macros, so back out
+            // the per-100g values here - renderMeal()/updateItemGrams() need
+            // them to recompute live as the portion is edited.
+            this.items = meal.items.map((item) => {
+                const scale = item.grams > 0 ? item.grams / 100 : 1;
+                return {
+                    id: item.id,
+                    fdc_id: item.fdc_id,
+                    name: item.name,
+                    grams: item.grams,
+                    per100: {
+                        calories: (item.calories || 0) / scale,
+                        protein_g: (item.protein_g || 0) / scale,
+                        carbs_g: (item.carbs_g || 0) / scale,
+                        fat_g: (item.fat_g || 0) / scale,
+                    },
+                };
+            });
+
+            // Hide the "Add Meal" entry point, show the builder section
+            const addMealCard = document.getElementById('add-meal-card');
+            if (addMealCard) addMealCard.style.display = 'none';
+
+            const section = document.getElementById('search-meal-section');
+            if (section) section.style.display = 'block';
+
+            const titleEl = document.getElementById('meal-builder-title');
+            if (titleEl) titleEl.textContent = 'Edit Meal';
+
+            const saveBtn = document.getElementById('save-search-meal-btn');
+            if (saveBtn) saveBtn.textContent = 'Save';
+
+            // Set the meal date input to the meal's date (parsed as local
+            // calendar components, same reasoning as formatDate())
+            const dateInput = document.getElementById('meal-date-input');
+            if (dateInput) dateInput.value = meal.meal_date;
+
+            // Set meal type select
+            const typeSelect = document.getElementById('meal-type-select');
+            if (typeSelect) {
+                const normalizedMealName = meal.name ? meal.name.toLowerCase() : '';
+                if (normalizedMealName.includes('breakfast')) typeSelect.value = 'Breakfast';
+                else if (normalizedMealName.includes('lunch')) typeSelect.value = 'Lunch';
+                else if (normalizedMealName.includes('dinner')) typeSelect.value = 'Dinner';
+                else if (normalizedMealName.includes('snack')) typeSelect.value = 'Snack';
+                else typeSelect.value = '';
+            }
+
+            this.renderMeal();
+
+        } catch (error) {
+            console.error('Error opening meal for editing:', error);
+            alert('Failed to load meal');
+        }
+    },
+
+    /**
+     * Copy a past meal into the builder as a brand new meal dated today (e.g.
+     * "I'm eating this again") - same builder as editing, but activeMeal
+     * stays null so Save creates a new meal via POST instead of PATCHing the
+     * original, and the date defaults to today rather than the original date.
+     */
+    async copyMealToToday(mealId) {
+        try {
+            const meal = await api.get(`/meals/${mealId}`);
+
+            activeMeal = null;
+
+            this.items = meal.items.map((item) => {
+                const scale = item.grams > 0 ? item.grams / 100 : 1;
+                return {
+                    fdc_id: item.fdc_id,
+                    name: item.name,
+                    grams: item.grams,
+                    per100: {
+                        calories: (item.calories || 0) / scale,
+                        protein_g: (item.protein_g || 0) / scale,
+                        carbs_g: (item.carbs_g || 0) / scale,
+                        fat_g: (item.fat_g || 0) / scale,
+                    },
+                };
+            });
+
+            const addMealCard = document.getElementById('add-meal-card');
+            if (addMealCard) addMealCard.style.display = 'none';
+
+            const section = document.getElementById('search-meal-section');
+            if (section) section.style.display = 'block';
+
+            const titleEl = document.getElementById('meal-builder-title');
+            if (titleEl) titleEl.textContent = 'New Meal';
+
+            const saveBtn = document.getElementById('save-search-meal-btn');
+            if (saveBtn) saveBtn.textContent = 'Save Meal';
+
+            // Date defaults to today, not the original meal's date
+            const dateInput = document.getElementById('meal-date-input');
+            if (dateInput) {
+                const today = new Date();
+                const localDate = new Date(today.getTime() - today.getTimezoneOffset() * 60000);
+                dateInput.value = localDate.toISOString().slice(0, 10);
+            }
+
+            // Carry over the meal type (Breakfast/Lunch/etc.) from the original
+            const typeSelect = document.getElementById('meal-type-select');
+            if (typeSelect) {
+                const normalizedMealName = meal.name ? meal.name.toLowerCase() : '';
+                if (normalizedMealName.includes('breakfast')) typeSelect.value = 'Breakfast';
+                else if (normalizedMealName.includes('lunch')) typeSelect.value = 'Lunch';
+                else if (normalizedMealName.includes('dinner')) typeSelect.value = 'Dinner';
+                else if (normalizedMealName.includes('snack')) typeSelect.value = 'Snack';
+                else typeSelect.value = '';
+            }
+
+            this.renderMeal();
+
+            section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+        } catch (error) {
+            console.error('Error copying meal:', error);
+            alert('Failed to copy meal');
+        }
+    },
+
+    /**
+     * Delete a meal - same pattern as deleteWorkout
+     */
+    async deleteMeal(mealId) {
+        if (!confirm('Are you sure you want to delete this meal?')) return;
+
+        try {
+            await api.delete(`/meals/${mealId}`);
+            this.loadSavedMeals();
+        } catch (error) {
+            console.error('Error deleting meal:', error);
+            alert('Failed to delete meal');
+        }
     },
 
     /**
@@ -2515,6 +2809,12 @@ const foodSearch = {
         return div.innerHTML;
     }
 };
+
+// Expose foodSearch globally: inline onclick="foodSearch...." handlers in
+// generated HTML (meal card, menu, detail panel) run in global scope and
+// can't see this module-scoped const otherwise - same reason workout's
+// history functions are assigned to window.* (e.g. window.showHistoryDetail).
+window.foodSearch = foodSearch;
 
 // ========== Service Worker registration (if supported)
 if ('serviceWorker' in navigator) {
