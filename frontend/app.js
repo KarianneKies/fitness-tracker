@@ -3111,20 +3111,36 @@ const foodSearch = {
         }
 
         listEl.className = '';
-        listEl.innerHTML = meals.map((meal) => `
-            <div class="history-card" onclick="foodSearch.showHistoryDetail(${meal.id})">
-                <div class="history-card-header">
-                    <span class="history-card-name">${this.escapeHtml(meal.name)}</span>
-                    <button class="history-menu-btn" onclick="event.stopPropagation(); foodSearch.showMealMenu(${meal.id}, event)">☰</button>
+
+        // Group into day sections (mirrors the workout list's month grouping).
+        // meals is already sorted by meal_date desc (then created_at desc) by
+        // the backend, so days come out in order just by walking the list.
+        const days = [];
+        let currentDay = null;
+        meals.forEach((meal) => {
+            if (!currentDay || currentDay.date !== meal.meal_date) {
+                currentDay = { date: meal.meal_date, meals: [] };
+                days.push(currentDay);
+            }
+            currentDay.meals.push(meal);
+        });
+
+        listEl.innerHTML = days.map((day) => `
+            <div class="history-month-header">${this.formatDate(day.date)}</div>
+            ${day.meals.map((meal) => `
+                <div class="history-card" onclick="foodSearch.showHistoryDetail(${meal.id})">
+                    <div class="history-card-header">
+                        <span class="history-card-name">${this.escapeHtml(meal.name)}</span>
+                        <button class="history-menu-btn" onclick="event.stopPropagation(); foodSearch.showMealMenu(${meal.id}, event)">☰</button>
+                    </div>
+                    <div style="font-size: 0.85rem; color: #666; margin-bottom: 0.5rem;">
+                        ${meal.items.map((item) => this.escapeHtml(item.name)).join(', ')}
+                    </div>
+                    <div style="font-size: 0.85rem; font-weight: bold;">
+                        ${Math.round(meal.total_calories)} kcal · ${meal.total_protein_g.toFixed(1)}g P · ${meal.total_carbs_g.toFixed(1)}g C · ${meal.total_fat_g.toFixed(1)}g F
+                    </div>
                 </div>
-                <div class="history-card-date">${this.formatDate(meal.meal_date)}</div>
-                <div style="font-size: 0.85rem; color: #666; margin-bottom: 0.5rem;">
-                    ${meal.items.map((item) => this.escapeHtml(item.name)).join(', ')}
-                </div>
-                <div style="font-size: 0.85rem; font-weight: bold;">
-                    ${Math.round(meal.total_calories)} kcal · ${meal.total_protein_g.toFixed(1)}g P · ${meal.total_carbs_g.toFixed(1)}g C · ${meal.total_fat_g.toFixed(1)}g F
-                </div>
-            </div>
+            `).join('')}
         `).join('');
     },
 
