@@ -1188,13 +1188,16 @@ async def create_meal(meal: MealCreate):
 @app.get("/meals", response_model=List[MealResponse])
 async def get_meals():
     """
-    Get all meals, most recent first, with their food items and totals.
+    Get all meals, most recent first (by meal_date, the day the meal is
+    actually for - not created_at, which is just when the row was inserted
+    and can disagree with meal_date after an edit, a backdated entry, or
+    "Copy to Today"). Same-day meals are ordered by created_at as a tiebreak.
 
     Returns:
         List[MealResponse]: All meals with items and computed totals
     """
     with get_session() as session:
-        meals = session.query(Meal).order_by(Meal.created_at.desc()).all()
+        meals = session.query(Meal).order_by(Meal.meal_date.desc(), Meal.created_at.desc()).all()
 
         result = []
         for db_meal in meals:
