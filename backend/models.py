@@ -6,6 +6,7 @@ SQLModel definitions for the Fitness Tracker application.
 This module defines all database models:
 - Workout: A complete workout session with start/end times
 - Exercise: An exercise performed during a workout (e.g., "Bench Press")
+- CustomExercise: A user-added exercise name, persisted for reuse in the picker
 - ExerciseSet: A single set of an exercise with reps, weight, rest
 - Meal: Meal records containing multiple food items
 - FoodItem: Individual food entries with nutrition data
@@ -141,6 +142,19 @@ class Exercise(SQLModel, table=True):
 
     # Relationship back to workout
     workout: Optional["Workout"] = Relationship(back_populates="exercises")
+
+
+class CustomExercise(SQLModel, table=True):
+    """
+    Model for a user-added exercise name, typed into the exercise picker when it
+    wasn't found in the built-in list. Persists so it appears in the picker on
+    later workouts too.
+    """
+    __tablename__ = "custom_exercises"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(..., unique=True, index=True, description="Exercise name as typed by the user")
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
 
 
 class ExerciseSet(SQLModel, table=True):

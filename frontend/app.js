@@ -121,32 +121,64 @@ const api = {
     }
 };
 
-// Timer functionality for active workout
+// Backend timestamps (e.g. Workout.started_at) are naive UTC - Python's
+// datetime.utcnow().isoformat() with no timezone suffix. JS's Date parser
+// treats a timezone-less "date-time" string as LOCAL time, not UTC, so
+// parsing it directly would silently shift by the local UTC offset (2
+// hours added, for example, in CEST). Appending "Z" forces correct UTC
+// interpretation.
+function parseUtcTimestamp(isoString) {
+    if (!isoString) return null;
+    const hasTz = /[Zz]|[+-]\d{2}:?\d{2}$/.test(isoString);
+    return new Date(hasTz ? isoString : `${isoString}Z`);
+}
+
+// Timer functionality for active workout.
+//
+// Elapsed time is computed from a stored start timestamp (Date.now() diff)
+// rather than incremented once per tick. A plain "seconds++ every 1000ms"
+// counter silently falls behind whenever the browser throttles/pauses
+// setInterval - which mobile Safari does aggressively for backgrounded or
+// screen-locked tabs, exactly the situation a mid-workout phone is often
+// in. Computing from a timestamp means every tick (whenever it actually
+// fires) always shows the true elapsed time, never a stale undercount.
 const timer = {
     intervalId: null,
-    seconds: 0,
-    
-    start() {
+    startTimestamp: null,
+
+    /**
+     * Start ticking. Pass the workout's real started_at (ISO string) so the
+     * displayed time is anchored to when the workout actually started on
+     * the server, not just to whenever this function happened to run.
+     */
+    start(startedAtIso) {
         this.stop();
+        this.startTimestamp = startedAtIso ? parseUtcTimestamp(startedAtIso).getTime() : Date.now();
+        updateTimerDisplay(this.seconds);
         this.intervalId = setInterval(() => {
-            this.seconds++;
             updateTimerDisplay(this.seconds);
         }, 1000);
     },
-    
+
     stop() {
         if (this.intervalId) {
             clearInterval(this.intervalId);
             this.intervalId = null;
         }
     },
-    
+
     reset() {
         this.stop();
-        this.seconds = 0;
+        this.startTimestamp = null;
         updateTimerDisplay(0);
     },
-    
+
+    /** Elapsed whole seconds since start, computed fresh every read - never drifts or goes stale */
+    get seconds() {
+        if (this.startTimestamp === null) return 0;
+        return Math.max(0, Math.floor((Date.now() - this.startTimestamp) / 1000));
+    },
+
     getFormattedTime() {
         const mins = Math.floor(this.seconds / 60);
         const secs = this.seconds % 60;
@@ -159,6 +191,25 @@ let activeWorkout = null;
 let activeMeal = null; // { id, isPastEdit } while editing a past meal in the meal builder
 let exercisesData = [];
 let currentExerciseNameFilter = '';
+let customExercises = []; // User-added exercise names, persisted via /exercises/custom
+let loggedExerciseNames = []; // Distinct names already used in logged workouts (e.g. imported history)
+
+async function loadCustomExercises() {
+    try {
+        const data = await api.get('/exercises/custom');
+        customExercises = data.map(e => e.name);
+    } catch (error) {
+        console.error('Error loading custom exercises:', error);
+    }
+}
+
+async function loadLoggedExerciseNames() {
+    try {
+        loggedExerciseNames = await api.get('/exercises/names');
+    } catch (error) {
+        console.error('Error loading logged exercise names:', error);
+    }
+}
 
 // Tab switching functionality
 function initTabs() {
@@ -218,26 +269,28 @@ function updateTimerDisplay(seconds) {
     document.getElementById('workout-timer').textContent = formatTime(seconds);
 }
 
+// Merge the hardcoded list, names already logged in the database, and persisted
+// custom exercises into one de-duplicated (case-insensitive) list
+function getAllExerciseNames() {
+    const seen = new Set();
+    const combined = [];
+    for (const name of exerciseList.concat(loggedExerciseNames, customExercises)) {
+        const key = name.toLowerCase();
+        if (!seen.has(key)) {
+            seen.add(key);
+            combined.push(name);
+        }
+    }
+    return combined;
+}
+
 // Filter exercises based on search term
 function filterExercises(searchTerm) {
     const term = searchTerm.toLowerCase().trim();
-    if (!term) return exerciseList;
-    
-    // First check for exact/partial matches
-    const matches = exerciseList.filter(ex => 
-        ex.toLowerCase().includes(term)
-    );
-    
-    if (matches.length > 0) {
-        return matches;
-    }
-    
-    // If no match, show custom exercise option
-    if (term.length > 0) {
-        return [`Custom: "${searchTerm}"`];
-    }
-    
-    return [];
+    const allExercises = getAllExerciseNames();
+    if (!term) return allExercises;
+
+    return allExercises.filter(ex => ex.toLowerCase().includes(term));
 }
 
 // Show exercise picker modal
@@ -354,31 +407,92 @@ function hideExercisePicker() {
 function renderExerciseList() {
     const list = document.getElementById('exercise-list');
     if (!list) return;
-    
-    const filtered = filterExercises(currentExerciseNameFilter);
-    
+
+    const term = currentExerciseNameFilter.trim();
+    const filtered = filterExercises(term);
+
+    let html = '';
     if (filtered.length === 0) {
-        list.innerHTML = '<p style="text-align: center; color: #888;">No exercises found</p>';
-        return;
-    }
-    
-    list.innerHTML = filtered.map(exercise => `
-        <div class="card" style="cursor: pointer; margin-bottom: 0.5rem;">
-            <div onclick="selectExercise('${exercise.replace(/'/g, "\\'")}')">
-                <strong>${exercise}</strong>
+        html += '<p style="text-align: center; color: #888;">No exercises found</p>';
+    } else {
+        html += filtered.map(exercise => `
+            <div class="card" style="cursor: pointer; margin-bottom: 0.5rem;">
+                <div onclick="selectExercise('${exercise.replace(/'/g, "\\'")}')">
+                    <strong>${exercise}</strong>
+                </div>
             </div>
-        </div>
-    `).join('');
+        `).join('');
+    }
+
+    // Offer to add the typed text as a new custom exercise, unless it's an
+    // exact (case-insensitive) match for something already in the list
+    const exactMatch = term && filtered.some(ex => ex.toLowerCase() === term.toLowerCase());
+    if (term && !exactMatch) {
+        html += `
+            <div class="card" style="cursor: pointer; margin-bottom: 0.5rem; border: 1px dashed #999;">
+                <div onclick="addCustomExercise('${term.replace(/'/g, "\\'")}')">
+                    <strong>+ Add "${term}"</strong>
+                </div>
+            </div>
+        `;
+    }
+
+    list.innerHTML = html;
 }
 
 // Select an exercise from picker
+// Add a typed exercise name that wasn't in the list: persist it so it appears
+// in the picker on future workouts, then add it to the current workout
+window.addCustomExercise = async function(name) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    if (!customExercises.some(ex => ex.toLowerCase() === trimmed.toLowerCase())) {
+        customExercises.push(trimmed);
+    }
+
+    try {
+        await api.post('/exercises/custom', { name: trimmed });
+    } catch (error) {
+        console.error('Error saving custom exercise for future use:', error);
+    }
+
+    selectExercise(trimmed);
+};
+
+// Fetch the sets from the last time this exercise was logged, for the read-only
+// "Previous" column. Display-only reference info - never overwrites current inputs.
+async function loadPreviousSetsForExercise(exercise) {
+    try {
+        const params = new URLSearchParams({ name: exercise.name });
+        if (activeWorkout && activeWorkout.id) {
+            params.set('exclude_workout_id', activeWorkout.id);
+        }
+        const data = await api.get(`/exercises/previous?${params.toString()}`);
+        exercise.previousSets = data.sets || [];
+    } catch (error) {
+        console.error('Error loading previous sets for', exercise.name, error);
+        exercise.previousSets = [];
+    }
+    renderExercises();
+}
+
+// Format a previous set for display, e.g. "45 kg × 8" or "30s hold"
+function formatPreviousSet(prev) {
+    if (!prev) return null;
+    const parts = [];
+    if (prev.weight_kg !== null && prev.weight_kg !== undefined) parts.push(`${prev.weight_kg} kg`);
+    if (prev.reps !== null && prev.reps !== undefined) parts.push(`${prev.reps}`);
+    let text = parts.join(' × ');
+    if (prev.hold_seconds !== null && prev.hold_seconds !== undefined) {
+        text = text ? `${text} · ${prev.hold_seconds}s hold` : `${prev.hold_seconds}s hold`;
+    }
+    return text || null;
+}
+
 window.selectExercise = function(exerciseName) {
     const modal = document.getElementById('exercise-picker-modal');
-    
-    if (exerciseName.startsWith('Custom:')) {
-        exerciseName = exerciseName.replace('Custom: "', '').replace('"', '');
-    }
-    
+
     // Check if we're replacing an existing exercise
     const replaceIndex = modal.dataset.replaceIndex;
     
@@ -417,6 +531,7 @@ window.selectExercise = function(exerciseName) {
                         exercisesData[index] = saved;
                         renderExercises();
                         hideExercisePicker();
+                        loadPreviousSetsForExercise(exercisesData[index]);
                     })
                     .catch(err => {
                         console.error('Error saving replacement:', err);
@@ -441,6 +556,7 @@ window.selectExercise = function(exerciseName) {
                         exercisesData[tempIndex] = JSON.parse(JSON.stringify(savedExercise));
                         console.log('After replace:', exercisesData);
                         renderExercises();
+                        loadPreviousSetsForExercise(exercisesData[tempIndex]);
                     }
                 })
                 .catch(err => {
@@ -514,8 +630,11 @@ async function saveExerciseToBackend(exercise, keepSets = false) {
             return `
         <div class="card" data-exercise-id="${exercise.id || 'temp'}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}" data-internal-index="${exIndex}">
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <strong>${exercise.name}</strong>
-                ${!exercise.id ? '<span style="font-size: 0.8rem; color: #888;">(unsaved)</span>' : ''}
+                <div>
+                    <strong>${exercise.name}</strong>
+                    ${!exercise.id ? '<span style="font-size: 0.8rem; color: #888;">(unsaved)</span>' : ''}
+                </div>
+                ${isLocked ? '' : `<button onclick="removeExercise(${exIndex})" title="Remove exercise" style="background: none; border: none; cursor: pointer; padding: 0.25rem; color: #dc3545; font-size: 1.1rem;">🗑️</button>`}
             </div>
             
             <table class="set-table" style="width: 100%; border-collapse: collapse; margin-top: 0.75rem; font-size: 0.85rem;">
@@ -525,7 +644,7 @@ async function saveExerciseToBackend(exercise, keepSets = false) {
                         <th style="text-align: left; padding: 0.5rem; width: 12%;">Previous</th>
                         <th style="text-align: left; padding: 0.5rem; width: 20%;">kg</th>
                         <th style="text-align: left; padding: 0.5rem; width: 20%;">Reps</th>
-                        <th style="text-align: center; padding: 0.5rem; width: 12%;">✓</th>
+                        <th style="text-align: center; padding: 0.5rem; width: 12%;">F</th>
                         <th style="text-align: center; padding: 0.5rem; width: 12%;">🗑️</th>
                     </tr>
                 </thead>
@@ -588,7 +707,11 @@ function renderSetRows(exercise, exIndex) {
         const repsDisplay = hasHold
             ? (repsVal !== '' ? `${repsVal} reps · ${set.hold_seconds}s hold` : `${set.hold_seconds}s hold`)
             : (repsVal !== '' ? `${repsVal} reps` : '');
-        
+
+        // Reference-only "last time" value for this set position - never overwrites current inputs
+        const previousText = exercise.previousSets ? formatPreviousSet(exercise.previousSets[setIndex]) : null;
+        const previousDisplay = previousText || '—';
+
         // For active workouts: show inputs + checkbox + bin icon
         if (!isLocked) {
             return `
@@ -597,7 +720,7 @@ function renderSetRows(exercise, exIndex) {
                     <span style="color: ${set.completed ? '#28a745' : '#666'}; font-weight: ${set.completed ? 'bold' : 'normal'};">Set ${setIndex + 1}</span>
                 </td>
                 <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
-                    <span style="color: #999;">—</span>
+                    <span style="color: #999;">${previousDisplay}</span>
                 </td>
                 <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
                     <input type="number" class="set-weight" data-set-index="${setIndex}" value="${weightVal}" placeholder="kg" min="0" step="0.5" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;" oninput="syncSetInputToState(${exIndex}, ${setIndex}, 'weight_kg', this.value)">
@@ -606,9 +729,7 @@ function renderSetRows(exercise, exIndex) {
                     <input type="number" class="set-reps" data-set-index="${setIndex}" value="${repsVal}" placeholder="reps" min="1" style="width: 100%; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px;" oninput="syncSetInputToState(${exIndex}, ${setIndex}, 'reps', this.value)">
                 </td>
                  <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
-                    <label style="cursor: pointer; display: flex; align-items: center; justify-content: center; width: 100%;">
-                        <input type="checkbox" class="set-checkbox" style="width: 18px; height: 18px; cursor: pointer;" ${set.completed ? 'checked' : ''} onchange="toggleSetCompleted(${exIndex}, ${setIndex}, this)">
-                    </label>
+                    <button type="button" class="set-failure-toggle" title="Mark set as taken to failure" onclick="toggleSetFailure(${exIndex}, ${setIndex}, this)" style="width: 26px; height: 26px; border-radius: 4px; border: 1px solid ${set.to_failure ? '#dc3545' : '#ccc'}; background: ${set.to_failure ? '#dc3545' : 'transparent'}; color: ${set.to_failure ? '#fff' : '#999'}; font-family: monospace; font-weight: bold; line-height: 1; cursor: pointer;">F</button>
                 </td>
                 <td style="padding: 0.5rem; border-bottom: 1px solid #eee; text-align: center;">
                     <button onclick="removeSet(${exIndex}, ${setIndex})" style="background: none; border: none; cursor: pointer; padding: 0.25rem; color: #dc3545;">🗑️</button>
@@ -624,7 +745,7 @@ function renderSetRows(exercise, exIndex) {
                 <span style="color: ${set.completed ? '#28a745' : '#666'}; font-weight: ${set.completed ? 'bold' : 'normal'};">Set ${setIndex + 1}</span>
             </td>
             <td style="padding: 0.5rem; border-bottom: 1px solid #eee;">
-                <span style="color: #999;">—</span>
+                <span style="color: #999;">${previousDisplay}</span>
             </td>
             <td style="padding: 0.5rem; border-bottom: 1px solid #eee;"><span style="color: #666;">${weightVal !== '' ? weightVal + 'kg' : ''}</span></td>
             <td style="padding: 0.5rem; border-bottom: 1px solid #eee;"><span style="color: #666;">${repsDisplay}</span></td>
@@ -648,7 +769,8 @@ window.showAddSetForm = function(exerciseIndex) {
         order: (exercise.sets ? exercise.sets.length : 0) + 1,
         reps: null,
         weight_kg: null,
-        completed: false
+        completed: false,
+        to_failure: false
     };
     
     if (!exercise.sets) exercise.sets = [];
@@ -658,34 +780,22 @@ window.showAddSetForm = function(exerciseIndex) {
     renderExercises();
 };
 
-// Toggle set checkbox - marks set as completed/not completed (frontend only)
-window.toggleSetCompleted = function(exerciseIndex, setIndex, checkbox) {
+// Toggle "to failure" flag for a set - persisted with the workout
+window.toggleSetFailure = function(exerciseIndex, setIndex, btn) {
     const exercise = exercisesData[exerciseIndex];
-    if (!exercise) return;
-    
-    // Find the row using the current DOM structure - use tbody by its index-based ID
-    const tbodyId = `sets-${exerciseIndex}`;
-    const tbody = document.getElementById(tbodyId);
-    if (!tbody) return;
-    
-    const allRows = tbody.querySelectorAll('tr');
-    if (setIndex >= allRows.length) return;
-    
-    const row = allRows[setIndex];
-    if (!row) return;
-    
-    // Toggle the completed class for visual styling
-    if (checkbox.checked) {
-        row.classList.add('completed-set');
-        // Update local state
-        if (exercise.sets && exercise.sets[setIndex]) {
-            exercise.sets[setIndex].completed = true;
-        }
+    if (!exercise || !exercise.sets || !exercise.sets[setIndex]) return;
+
+    const newValue = !exercise.sets[setIndex].to_failure;
+    exercise.sets[setIndex].to_failure = newValue;
+
+    if (newValue) {
+        btn.style.background = '#dc3545';
+        btn.style.borderColor = '#dc3545';
+        btn.style.color = '#fff';
     } else {
-        row.classList.remove('completed-set');
-        if (exercise.sets && exercise.sets[setIndex]) {
-            exercise.sets[setIndex].completed = false;
-        }
+        btn.style.background = 'transparent';
+        btn.style.borderColor = '#ccc';
+        btn.style.color = '#999';
     }
 };
 
@@ -788,36 +898,40 @@ window.cancelNewSet = function(btn) {
     btn.closest('tr').remove();
 };
 
-// Remove exercise from workout
-window.removeExercise = function(exerciseIndex) {
-    console.log('removeExercise called with index:', exerciseIndex);
-    
+// Remove exercise from workout, identified reliably by its unique id (not just render position)
+window.removeExercise = async function(exerciseIndex) {
     const exercise = exercisesData[exerciseIndex];
-    
+
     if (!exercise) {
         console.log('Exercise not found at index:', exerciseIndex);
         return;
     }
-    
-    // If it's a new exercise (no ID), just remove from local state
+
+    if (!confirm(`Remove "${exercise.name}" from this workout?`)) return;
+
+    // Unsaved/temp exercise (no id yet) - nothing persisted, just drop from local state
     if (!exercise.id) {
-        console.log('Removing temp exercise');
-        exercisesData.splice(exerciseIndex, 1);
+        const tempIdx = exercisesData.indexOf(exercise);
+        if (tempIdx !== -1) exercisesData.splice(tempIdx, 1);
         renderExercises();
-        console.log('After removal, exercisesData length:', exercisesData.length);
         return;
     }
-    
-    // If it's a saved exercise, remove from local state
-    // Backend doesn't have delete endpoint for individual exercises,
-    // so this just removes from display. The exercise will remain in database.
-    console.log('Removing saved exercise');
-    exercisesData.splice(exerciseIndex, 1);
+
+    // Saved exercise - delete it from the backend by its unique id first,
+    // so the removal persists (and its sets don't silently reappear later)
+    try {
+        await api.delete(`/workouts/${activeWorkout.id}/exercises/${exercise.id}`);
+    } catch (err) {
+        console.error('Error removing exercise:', err);
+        alert('Failed to remove exercise');
+        return;
+    }
+
+    // Re-find by unique id rather than trusting the captured index, in case
+    // the array shifted between the click and the delete request resolving
+    const idx = exercisesData.findIndex(ex => ex.id === exercise.id);
+    if (idx !== -1) exercisesData.splice(idx, 1);
     renderExercises();
-    console.log('After removal, exercisesData length:', exercisesData.length);
-    
-    // Note: To fully remove from database, you'd need to finish the workout
-    // or use a PATCH to rebuild exercises list without this one.
 };
 
 // Replace exercise in workout
@@ -908,7 +1022,11 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Initialize tabs
     initTabs();
-    
+
+    // Load persisted custom exercise names for the exercise picker
+    loadCustomExercises();
+    loadLoggedExerciseNames();
+
     // Initialize food photo analysis functionality
     if (typeof foodPhoto !== 'undefined' && foodPhoto.init) {
         foodPhoto.init();
@@ -948,9 +1066,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Set active workout ID display
                 document.getElementById('active-workout-id').textContent = `Workout #${workout.id}`;
                 
-                // Start the timer
-                timer.start();
-                
+                // Start the timer, anchored to the server-recorded start time
+                timer.start(activeWorkout.started_at);
+
                 // Reset exercises data for new workout - ensure we have a NEW array, not just empty
                 if (exercisesData === null || exercisesData === undefined) {
                     exercisesData = [];
@@ -1064,19 +1182,24 @@ document.addEventListener('DOMContentLoaded', () => {
                     exercises: exercisesPayload
                 });
 
+                // Read the final elapsed time BEFORE resetting - timer.reset()
+                // zeroes it, so building this message after reset() always
+                // read back "00:00" regardless of how long the workout ran.
+                const finalDuration = timer.getFormattedTime();
+
                 // Reset active workout state
                 activeWorkout = null;
                 exercisesData = [];
-                
+
                 // Hide active workout section, show start button
                 document.getElementById('active-workout-section').style.display = 'none';
                 document.getElementById('start-workout-section').style.display = 'block';
-                
+
                 // Reset timer
                 timer.reset();
-                
-                let message = `Workout finished! Duration: ${timer.getFormattedTime()}\n\nAll sets have been saved. You can edit past workouts using the "Edit" button in the History tab.`;
-                
+
+                let message = `Workout finished! Duration: ${finalDuration}\n\nAll sets have been saved. You can edit past workouts using the "Edit" button in the History tab.`;
+
                 alert(message);
 
                 // Reload workouts list
@@ -1410,6 +1533,8 @@ document.addEventListener('DOMContentLoaded', () => {
             exercisesData.forEach(ex => {
                 (ex.sets || []).forEach(set => { set.completed = true; });
             });
+            // Load "Previous" reference data (the session before this one) for each exercise
+            exercisesData.forEach(ex => loadPreviousSetsForExercise(ex));
 
             // Hide start button, show active workout section
             document.getElementById('start-workout-section').style.display = 'none';
