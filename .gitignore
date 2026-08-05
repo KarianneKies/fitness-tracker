@@ -1,0 +1,24 @@
+# Data directories (personal health data must never be committed)
+data/photos/
+data/usda/
+data/openfoodfacts/
+
+# Personal workout export (must never be committed)
+strong_workouts.csv
+
+# Database files
+*.db
+
+# Python cache and virtual environment
+__pycache__/
+.venv/
+
+# IDE files
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

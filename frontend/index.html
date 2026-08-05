@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Kari's Tracker</title>
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#1a1a2e">
+    <meta name="description" content="Local-first fitness and nutrition tracker">
+
+    <!-- iOS: install to home screen as a standalone, full-screen app -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Kari's Tracker">
+    <link rel="apple-touch-icon" href="/icon-192.png">
+
+    <!-- PWA Styles -->
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        .app-container {
+            max-width: 600px;
+            margin: 0 auto;
+            min-height: 100vh;
+            background: #fff;
+        }
+        
+        header {
+            background: #1a1a2e;
+            color: white;
+            padding: 1rem;
+            text-align: center;
+        }
+        
+        header h1 {
+            font-size: 1.5rem;
+        }
+        
+        .content-area {
+            padding: 1rem;
+        }
+        
+        /* Tabs */
+        .tabs {
+            display: flex;
+            background: #1a1a2e;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .tab {
+            flex: 1;
+            padding: 1rem;
+            text-align: center;
+            cursor: pointer;
+            color: #aaa;
+            transition: color 0.2s, border-bottom 0.2s;
+        }
+        
+        .tab.active {
+            color: white;
+            border-bottom: 3px solid #e94560;
+        }
+        
+        .tab:hover {
+            color: #ddd;
+        }
+        
+        /* Tab Content */
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.3s;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        /* Cards */
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .card h2 {
+            font-size: 1.2rem;
+            margin-bottom: 0.5rem;
+            color: #1a1a2e;
+        }
+        
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .metric:last-child {
+            border-bottom: none;
+        }
+        
+        /* Buttons */
+        .btn {
+            background: #e94560;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            width: 100%;
+        }
+        
+        .btn:hover {
+            background: #d63850;
+        }
+        
+        .btn-secondary {
+            background: #1a1a2e;
+        }
+        
+        .btn-secondary:hover {
+            background: #0f0f1e;
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        
+        /* Timer Display */
+        .timer-display {
+            font-size: 2.5rem;
+            text-align: center;
+            font-weight: bold;
+            color: #e94560;
+            margin: 1rem 0;
+        }
+        
+        /* Exercise Form */
+        .exercise-form {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-top: 1rem;
+        }
+        
+        .exercise-form h4 {
+            margin-bottom: 0.75rem;
+        }
+        
+        .exercise-form input,
+        .exercise-form textarea {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 1rem;
+        }
+        
+        .exercise-form textarea {
+            resize: vertical;
+            min-height: 60px;
+        }
+        
+        /* Sets Container */
+        .sets-container {
+            margin-top: 1rem;
+        }
+        
+        .set-item {
+            background: #f0f4f8;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+        }
+        
+        .set-form {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        
+        .set-form input {
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+        
+        .set-form input[type="number"] {
+            flex: 1;
+            min-width: 80px;
+        }
+        
+        .set-form label {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-size: 0.85rem;
+        }
+        
+        /* Workout List */
+        .workout-list {
+            margin-top: 1rem;
+        }
+        
+        .workout-item {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+            cursor: pointer;
+        }
+        
+        .workout-item:hover {
+            background: #e9ecef;
+        }
+        
+        .workout-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .workout-date {
+            font-weight: bold;
+            color: #1a1a2e;
+        }
+        
+        .workout-duration {
+            font-size: 0.85rem;
+            color: #666;
+        }
+        
+        .workout-notes {
+            margin-top: 0.25rem;
+            font-size: 0.85rem;
+            color: #666;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        /* Active Workout Header */
+        .active-workout-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        
+        .workout-id {
+            font-size: 0.85rem;
+            color: #999;
+        }
+        
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 2rem;
+            color: #888;
+        }
+        
+        /* History List Cards */
+        .history-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .history-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        
+        .history-card-name {
+            font-weight: bold;
+            color: #1a1a2e;
+            flex: 1;
+        }
+        
+        .history-menu-btn {
+            background: none;
+            border: none;
+            font-size: 1.25rem;
+            cursor: pointer;
+            color: #666;
+            padding: 0.25rem 0.5rem;
+        }
+        
+        .history-card-date {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 0.5rem;
+        }
+        
+        .history-stats {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 0.75rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid #eee;
+        }
+        
+        .history-stat {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-size: 0.85rem;
+            color: #666;
+        }
+        
+        .history-stat-icon {
+            font-size: 0.9rem;
+        }
+        
+        .history-exercises-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        
+        .history-exercises-table th {
+            text-align: left;
+            padding: 0.25rem;
+            color: #999;
+        }
+        
+        .history-exercises-table td {
+            padding: 0.25rem;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .history-exercises-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        /* Month Group Headers */
+        .history-month-header {
+            font-size: 0.85rem;
+            font-weight: bold;
+            color: #e94560;
+            text-transform: uppercase;
+            margin-top: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        /* History Detail View Panel */
+        .history-detail-panel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .history-detail-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem;
+            border-bottom: 1px solid #eee;
+            background: white;
+        }
+        
+        .history-detail-title {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #1a1a2e;
+        }
+        
+        .history-detail-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #666;
+        }
+        
+        .history-detail-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .history-detail-edit-btn {
+            background: #e94560;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        
+        .history-detail-content {
+            flex: 1;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+        
+        .history-detail-date {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 1rem;
+        }
+        
+        .history-detail-stats {
+            display: flex;
+            gap: 1.5rem;
+            padding: 0.75rem 1rem;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+        
+        .history-detail-stat {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .history-detail-stat-icon {
+            font-size: 1rem;
+            color: #e94560;
+        }
+        
+        .history-detail-stat-value {
+            font-weight: bold;
+            color: #1a1a2e;
+        }
+        
+        .history-detail-exercise {
+            margin-bottom: 1rem;
+        }
+        
+        .history-detail-exercise-name {
+            font-weight: bold;
+            color: #1a1a2e;
+            margin-bottom: 0.5rem;
+        }
+        
+        .history-detail-set {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .history-detail-set:last-child {
+            border-bottom: none;
+        }
+        
+        .history-detail-set-info {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .history-detail-set-num {
+            font-family: monospace;
+            color: #666;
+        }
+        
+        .history-detail-set-num-fail {
+            font-family: monospace;
+            color: #dc3545;
+            font-weight: bold;
+        }
+        
+        .history-detail-set-stats {
+            color: #666;
+        }
+
+        /* Meal History Detail View Styles (mirrors workout) */
+        .meal-history-detail-panel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            z-index: 1200;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .meal-history-detail-header {
+            padding: 1rem;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .meal-history-detail-title {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #1a1a2e;
+        }
+
+        .meal-history-detail-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #666;
+        }
+
+        .meal-history-detail-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .meal-history-detail-edit-btn {
+            background: #e94560;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+
+        .meal-history-detail-content {
+            flex: 1;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+
+        .meal-history-detail-date {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 1rem;
+        }
+
+        .meal-history-detail-stats {
+            display: flex;
+            gap: 1.5rem;
+            padding: 0.75rem 1rem;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+
+        .meal-history-detail-stat {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .meal-history-detail-stat-icon {
+            font-size: 1rem;
+            color: #e94560;
+        }
+
+        .meal-history-detail-stat-value {
+            font-weight: bold;
+            color: #1a1a2e;
+        }
+
+        .meal-history-detail-food {
+            margin-bottom: 1rem;
+        }
+
+        .meal-history-detail-food-name {
+            font-weight: bold;
+            color: #1a1a2e;
+            margin-bottom: 0.25rem;
+        }
+
+        .meal-history-detail-food-grams {
+            font-size: 0.85rem;
+            color: #666;
+        }
+
+        .meal-history-detail-food-macros {
+            font-size: 0.8rem;
+            color: #666;
+        }
+
+        /* Check-in History Detail View Styles (mirrors meal/workout) */
+        .checkin-detail-panel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            z-index: 1200;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .checkin-detail-header {
+            padding: 1rem;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .checkin-detail-title {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #1a1a2e;
+        }
+
+        .checkin-detail-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #666;
+        }
+
+        .checkin-detail-edit-btn {
+            background: #e94560;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+
+        .checkin-detail-content {
+            flex: 1;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+
+        .checkin-detail-date {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 1rem;
+        }
+
+        .checkin-detail-photo {
+            width: 100%;
+            border-radius: 12px;
+            margin-bottom: 1rem;
+        }
+
+        .checkin-detail-stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem 1.5rem;
+            padding: 0.75rem 1rem;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+
+        .checkin-detail-stat-label {
+            font-size: 0.8rem;
+            color: #666;
+        }
+
+        .checkin-detail-stat-value {
+            font-weight: bold;
+            color: #1a1a2e;
+        }
+
+        .checkin-detail-notes {
+            font-size: 0.9rem;
+            color: #333;
+            white-space: pre-wrap;
+        }
+
+        /* Check-in Cards */
+        .checkin-card-photo {
+            width: 100%;
+            max-height: 200px;
+            object-fit: cover;
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+        }
+
+        .checkin-delta {
+            font-size: 0.8rem;
+        }
+
+        .checkin-delta-down {
+            color: #2e7d32;
+        }
+
+        .checkin-delta-up {
+            color: #dc3545;
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <header>
+            <h1>Kari's Tracker</h1>
+        </header>
+        
+        <nav class="tabs">
+            <div class="tab active" data-tab="today">Today</div>
+            <div class="tab" data-tab="food">Food</div>
+            <div class="tab" data-tab="workout">Workout</div>
+            <div class="tab" data-tab="checkin">Check-in</div>
+        </nav>
+        
+        <main class="content-area">
+            <!-- Today Tab -->
+            <div id="today" class="tab-content active">
+                <h2 style="margin-bottom: 1rem;">Today's Overview</h2>
+                <div class="card">
+                    <h3>Calories</h3>
+                    <div class="metric">
+                        <span>Consumed:</span>
+                        <span id="calories-consumed">0</span>
+                    </div>
+                    <div class="metric">
+                        <span>Goal:</span>
+                        <span id="calories-goal">Not set</span>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>Macros</h3>
+                    <div class="metric">
+                        <span>Protein:</span>
+                        <span id="protein-progress">0g</span>
+                    </div>
+                    <div class="metric">
+                        <span>Carbs:</span>
+                        <span id="carbs-progress">0g</span>
+                    </div>
+                    <div class="metric">
+                        <span>Fat:</span>
+                        <span id="fat-progress">0g</span>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>Exercise</h3>
+                    <div class="metric">
+                        <span>Duration today:</span>
+                        <span id="exercise-duration">0 min</span>
+                    </div>
+                    <div class="metric">
+                        <span>This week:</span>
+                        <span id="training-days-progress">0 workouts</span>
+                    </div>
+                </div>
+
+                <!-- Goal summary + edit entry point -->
+                <div class="card" id="goal-display-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                        <h3 style="margin-bottom: 0;">Your Goal</h3>
+                        <button id="edit-goal-btn" class="btn btn-secondary" style="width: auto; padding: 0.4rem 0.9rem; font-size: 0.85rem;">Edit</button>
+                    </div>
+                    <div id="goal-summary" class="empty-state">No goal set yet.</div>
+                </div>
+
+                <!-- Goal form (hidden until "Edit" or first-time setup) -->
+                <div class="card" id="goal-form-section" style="display: none;">
+                    <h3>Set Your Goal</h3>
+
+                    <label for="goal-calories-input" style="font-size: 0.85rem; color: #666;">Daily calorie target (kcal)</label>
+                    <input type="number" step="any" id="goal-calories-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+
+                    <div style="display: flex; gap: 0.5rem;">
+                        <div style="flex: 1;">
+                            <label for="goal-protein-input" style="font-size: 0.85rem; color: #666;">Protein (g)</label>
+                            <input type="number" step="any" id="goal-protein-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label for="goal-carbs-input" style="font-size: 0.85rem; color: #666;">Carbs (g)</label>
+                            <input type="number" step="any" id="goal-carbs-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label for="goal-fat-input" style="font-size: 0.85rem; color: #666;">Fat (g)</label>
+                            <input type="number" step="any" id="goal-fat-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                    </div>
+
+                    <label for="goal-training-days-input" style="font-size: 0.85rem; color: #666;">Training days per week (optional)</label>
+                    <input type="number" step="1" min="0" max="7" id="goal-training-days-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+
+                    <label for="goal-target-weight-input" style="font-size: 0.85rem; color: #666;">Target weight (kg, optional)</label>
+                    <input type="number" step="any" id="goal-target-weight-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+
+                    <label for="goal-target-date-input" style="font-size: 0.85rem; color: #666;">Target date (optional)</label>
+                    <input type="date" id="goal-target-date-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+
+                    <button id="save-goal-btn" class="btn">Save Goal</button>
+                    <button id="cancel-goal-btn" class="btn btn-secondary" style="margin-top: 0.5rem;">Cancel</button>
+                </div>
+            </div>
+
+            <!-- Food Tab -->
+            <div id="food" class="tab-content">
+                <h2 style="margin-bottom: 1rem;">Food Log</h2>
+                
+                <!-- Photo Capture Section -->
+                <div class="card">
+                    <button id="capture-photo-btn" class="btn">📷 Capture Food Photo</button>
+                    <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #666;">
+                        Take a photo of your meal to identify food items and estimate portions. You'll review and adjust everything before saving.
+                    </p>
+                    <div id="loading-indicator" style="display: none; text-align: center; padding: 1rem;">
+                        <p style="color: #666;">Analyzing photo with AI…</p>
+                    </div>
+                </div>
+
+                <!-- Hidden file input for photo capture (opens the native camera on mobile) -->
+                <input type="file" id="photo-input" accept="image/*" capture="environment" style="display: none;">
+
+                <!-- Add Meal entry point -->
+                <div class="card" id="add-meal-card">
+                    <button id="add-meal-btn" class="btn btn-secondary">+ Add Meal</button>
+                </div>
+
+                <!-- Meal builder screen: search & add foods, edit portions, running total -->
+                <div id="search-meal-section" class="card" style="display: none;">
+                    <h3 id="meal-builder-title">New Meal</h3>
+
+                    <label for="meal-type-select" style="font-size: 0.85rem; color: #666;">Meal type</label>
+                    <select id="meal-type-select" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        <option value="">Meal</option>
+                        <option value="Breakfast">Breakfast</option>
+                        <option value="Lunch">Lunch</option>
+                        <option value="Dinner">Dinner</option>
+                        <option value="Snack">Snack</option>
+                    </select>
+
+                    <label for="meal-date-input" style="font-size: 0.85rem; color: #666;">Date</label>
+                    <input type="date" id="meal-date-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+
+                    <button id="add-food-btn" class="btn">🔍 Add Food</button>
+
+                    <div id="search-meal-items" style="margin-top: 1rem;"></div>
+                    <p id="search-meal-empty" style="color: #888; font-size: 0.9rem; margin-top: 0.5rem;">No foods added yet.</p>
+
+                    <div id="search-meal-total" style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #eee; font-weight: bold;"></div>
+
+                    <button id="save-search-meal-btn" class="btn" style="margin-top: 1rem;">Save Meal</button>
+                    <button id="clear-search-meal-btn" class="btn btn-secondary" style="margin-top: 0.5rem;">Cancel</button>
+                </div>
+
+                <div class="card">
+                    <h3>Saved Meals</h3>
+                    <div id="saved-meals-list" class="empty-state">
+                        No meals logged yet.
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Workout Tab -->
+            <div id="workout" class="tab-content">
+                <h2 style="margin-bottom: 1rem;">Workout Log</h2>
+                
+                <!-- Active Workout Section -->
+                <div id="active-workout-section" style="display: none;">
+                    <div class="card">
+                        <div class="active-workout-header">
+                            <h3 id="workout-title" style="margin: 0;">Active Workout</h3>
+                            <span class="workout-id" id="active-workout-id"></span>
+                            <button onclick="closeActiveWorkout()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; padding: 0.25rem; color: #666;">&times;</button>
+                        </div>
+                        
+                        <div class="active-workout-controls" style="display: flex; justify-content: space-between; align-items: center; margin-top: 1rem;">
+                            <button id="finish-workout" class="btn">Finish</button>
+                        </div>
+                        
+                        <div style="margin-bottom: 1rem;">
+                            <label for="workout-name-input" style="font-size: 0.85rem; color: #666;">Workout Name:</label>
+                            <input type="text" id="workout-name-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.9rem;" placeholder="e.g., Upper Body Push Day">
+                        </div>
+                        
+                        <div class="timer-display" id="workout-timer">00:00</div>
+                        
+                        <button id="start-new-exercise" class="btn btn-secondary">+ Add Exercise</button>
+                        
+                        <div id="workout-exercises" style="margin-top: 1rem;">
+                            <!-- Exercises will be rendered here -->
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Start New Workout Section -->
+                <div id="start-workout-section" class="card">
+                    <button id="start-new-workout" class="btn">▶ Start Workout</button>
+                </div>
+                
+                <!-- Past Workouts Section -->
+                <div class="card">
+                    <h3 style="margin-bottom: 0.75rem;">Past Workouts</h3>
+                    <div id="workout-list" class="empty-state">
+                        No workouts logged yet.
+                    </div>
+                </div>
+
+            </div>
+            
+            <!-- Check-in Tab -->
+            <div id="checkin" class="tab-content">
+                <h2 style="margin-bottom: 1rem;">Weekly Check-in</h2>
+
+                <!-- Add Check-in entry point -->
+                <div class="card" id="add-checkin-card">
+                    <button id="add-checkin-btn" class="btn">+ Add Check-in</button>
+                </div>
+
+                <!-- Check-in form: add or edit -->
+                <div id="checkin-form-section" class="card" style="display: none;">
+                    <h3 id="checkin-form-title">New Check-in</h3>
+
+                    <label for="checkin-date-input" style="font-size: 0.85rem; color: #666;">Date</label>
+                    <input type="date" id="checkin-date-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+
+                    <label for="checkin-weight-input" style="font-size: 0.85rem; color: #666;">Weight (kg)</label>
+                    <input type="number" step="any" id="checkin-weight-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+
+                    <div style="display: flex; gap: 0.5rem;">
+                        <div style="flex: 1;">
+                            <label for="checkin-waist-input" style="font-size: 0.85rem; color: #666;">Waist (cm)</label>
+                            <input type="number" step="any" id="checkin-waist-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label for="checkin-chest-input" style="font-size: 0.85rem; color: #666;">Chest (cm)</label>
+                            <input type="number" step="any" id="checkin-chest-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 0.5rem;">
+                        <div style="flex: 1;">
+                            <label for="checkin-hips-input" style="font-size: 0.85rem; color: #666;">Hips (cm)</label>
+                            <input type="number" step="any" id="checkin-hips-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label for="checkin-arm-input" style="font-size: 0.85rem; color: #666;">Arm (cm)</label>
+                            <input type="number" step="any" id="checkin-arm-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label for="checkin-thigh-input" style="font-size: 0.85rem; color: #666;">Thigh (cm)</label>
+                            <input type="number" step="any" id="checkin-thigh-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        </div>
+                    </div>
+
+                    <label for="checkin-photo-input" style="font-size: 0.85rem; color: #666;">Progress photo (optional)</label>
+                    <input type="file" id="checkin-photo-input" accept="image/*" capture="environment" style="margin-bottom: 0.5rem;">
+                    <div id="checkin-photo-preview" style="display: none; margin-bottom: 0.75rem;"></div>
+
+                    <label for="checkin-notes-input" style="font-size: 0.85rem; color: #666;">Notes</label>
+                    <textarea id="checkin-notes-input" rows="3" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem; resize: vertical;" placeholder="How did this week go?"></textarea>
+
+                    <button id="save-checkin-btn" class="btn">Save Check-in</button>
+                    <button id="cancel-checkin-btn" class="btn btn-secondary" style="margin-top: 0.5rem;">Cancel</button>
+                </div>
+
+                <!-- Check-in history -->
+                <div class="card">
+                    <h3>History</h3>
+                    <div id="checkin-list" class="empty-state">
+                        No check-ins logged yet.
+                    </div>
+                </div>
+            </div>
+            
+        </main>
+    </div>
+    
+    <script type="module" src="app.js?v=20260805-4"></script>
+</body>
+</html>

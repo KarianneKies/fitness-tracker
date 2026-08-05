@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Kari's Tracker — Dashboard</title>
+<meta name="theme-color" content="#0f0f1e">
+<style>
+    * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+    }
+
+    html, body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #0f0f1e;
+        color: #f5f5f7;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    }
+
+    #app {
+        position: relative;
+        width: 100%;
+        height: 100%;
+    }
+
+    /* ===== Top bar (hidden while fullscreen + idle) ===== */
+    .topbar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem 1.5rem;
+        z-index: 100;
+        transition: opacity 0.4s ease;
+    }
+
+    .topbar-title {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #aaa;
+        letter-spacing: 0.02em;
+    }
+
+    .topbar-controls {
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+    }
+
+    .icon-btn {
+        background: rgba(255,255,255,0.08);
+        border: none;
+        color: #f5f5f7;
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        font-size: 1.2rem;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .icon-btn:hover {
+        background: rgba(255,255,255,0.16);
+    }
+
+    body.is-fullscreen .topbar {
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    body.is-fullscreen.chrome-visible .topbar {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    /* ===== Panel dots ===== */
+    .panel-dots {
+        position: fixed;
+        bottom: 1.25rem;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 0.5rem;
+        z-index: 100;
+        transition: opacity 0.4s ease;
+    }
+
+    body.is-fullscreen .panel-dots {
+        opacity: 0;
+    }
+
+    body.is-fullscreen.chrome-visible .panel-dots {
+        opacity: 1;
+    }
+
+    .panel-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: rgba(255,255,255,0.25);
+        transition: background 0.3s ease;
+    }
+
+    .panel-dot.active {
+        background: #e94560;
+    }
+
+    /* ===== Panels ===== */
+    .panels {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 5rem 3rem;
+    }
+
+    .panel {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 5rem 3rem;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 1s ease;
+    }
+
+    .panel.active {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .panel-heading {
+        font-size: 1.4rem;
+        font-weight: 600;
+        color: #9a9ab5;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 2.5rem;
+        text-align: center;
+    }
+
+    /* ===== Panel: Macros vs goal ===== */
+    .hero-number {
+        font-size: 7rem;
+        font-weight: 700;
+        line-height: 1;
+        color: #fff;
+    }
+
+    .hero-sub {
+        font-size: 1.5rem;
+        color: #9a9ab5;
+        margin-top: 0.5rem;
+        margin-bottom: 3rem;
+    }
+
+    .macro-bars {
+        width: 100%;
+        max-width: 720px;
+        display: flex;
+        flex-direction: column;
+        gap: 1.75rem;
+    }
+
+    .macro-bar-row {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .macro-bar-label {
+        display: flex;
+        justify-content: space-between;
+        font-size: 1.3rem;
+        color: #e4e4ec;
+    }
+
+    .macro-bar-label .muted {
+        color: #7d7d95;
+    }
+
+    .macro-bar-track {
+        height: 14px;
+        border-radius: 7px;
+        background: rgba(255,255,255,0.08);
+        overflow: hidden;
+    }
+
+    .macro-bar-fill {
+        height: 100%;
+        border-radius: 7px;
+        background: #e94560;
+        transition: width 0.8s ease;
+    }
+
+    /* ===== Panel: Weekly training stats ===== */
+    .stat-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 2.5rem 4rem;
+    }
+
+    .stat-tile {
+        text-align: center;
+    }
+
+    .stat-tile-value {
+        font-size: 4.5rem;
+        font-weight: 700;
+        color: #fff;
+        line-height: 1;
+    }
+
+    .stat-tile-label {
+        font-size: 1.15rem;
+        color: #9a9ab5;
+        margin-top: 0.6rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+
+    /* ===== Panel: Weight trend ===== */
+    .trend-hero {
+        display: flex;
+        align-items: baseline;
+        gap: 1rem;
+        margin-bottom: 2.5rem;
+    }
+
+    .trend-delta {
+        font-size: 1.6rem;
+        font-weight: 600;
+        padding: 0.3rem 0.9rem;
+        border-radius: 999px;
+    }
+
+    .trend-delta.down {
+        color: #7ee0a8;
+        background: rgba(126,224,168,0.12);
+    }
+
+    .trend-delta.up {
+        color: #ff8a8a;
+        background: rgba(255,138,138,0.12);
+    }
+
+    .trend-delta.flat {
+        color: #9a9ab5;
+        background: rgba(154,154,181,0.12);
+    }
+
+    .trend-chart {
+        width: 100%;
+        max-width: 900px;
+    }
+
+    .trend-empty, .macro-empty, .stats-empty, .muscle-empty {
+        font-size: 1.3rem;
+        color: #7d7d95;
+        text-align: center;
+    }
+
+    /* ===== Panel: Muscle silhouette ===== */
+    .muscle-layout {
+        display: flex;
+        align-items: center;
+        gap: 4rem;
+    }
+
+    .muscle-figures {
+        display: flex;
+        gap: 2.5rem;
+    }
+
+    .muscle-figure-label {
+        text-align: center;
+        font-size: 0.95rem;
+        color: #7d7d95;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-top: 0.5rem;
+    }
+
+    .muscle-legend {
+        display: flex;
+        flex-direction: column;
+        gap: 0.9rem;
+        min-width: 260px;
+    }
+
+    .muscle-legend-row {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        font-size: 1.15rem;
+    }
+
+    .muscle-legend-swatch {
+        width: 16px;
+        height: 16px;
+        border-radius: 4px;
+        flex-shrink: 0;
+    }
+
+    .muscle-legend-name {
+        flex: 1;
+        color: #e4e4ec;
+    }
+
+    .muscle-legend-count {
+        color: #9a9ab5;
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* ===== Idle hint (shown briefly on load, in fullscreen) ===== */
+    .hint {
+        position: fixed;
+        bottom: 3.5rem;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 0.9rem;
+        color: #7d7d95;
+        opacity: 0;
+        transition: opacity 0.6s ease;
+        pointer-events: none;
+        z-index: 100;
+    }
+
+    .hint.visible {
+        opacity: 1;
+    }
+
+    @media (max-width: 700px) {
+        .hero-number { font-size: 4.5rem; }
+        .stat-tile-value { font-size: 3rem; }
+        .stat-grid { grid-template-columns: 1fr 1fr; gap: 2rem; }
+        .muscle-layout { flex-direction: column; gap: 2rem; }
+        .panel-heading { font-size: 1.1rem; }
+    }
+</style>
+</head>
+<body>
+<div id="app">
+    <div class="topbar">
+        <div class="topbar-title">KARI'S TRACKER — DASHBOARD</div>
+        <div class="topbar-controls">
+            <button id="pause-btn" class="icon-btn" title="Pause rotation">⏸</button>
+            <button id="fullscreen-btn" class="icon-btn" title="Enter fullscreen">⛶</button>
+        </div>
+    </div>
+
+    <div class="panels">
+        <!-- Panel 1: Muscle silhouette -->
+        <div class="panel active" data-panel="0">
+            <div class="panel-heading">Muscles Worked — Last 7 Days</div>
+            <div id="muscle-panel-content"></div>
+        </div>
+
+        <!-- Panel 2: This week's training stats -->
+        <div class="panel" data-panel="1">
+            <div class="panel-heading">This Week's Training</div>
+            <div id="stats-panel-content"></div>
+        </div>
+
+        <!-- Panel 3: Today's macros vs goal -->
+        <div class="panel" data-panel="2">
+            <div class="panel-heading">Today</div>
+            <div id="macros-panel-content"></div>
+        </div>
+
+        <!-- Panel 4: Weight/measurement trend -->
+        <div class="panel" data-panel="3">
+            <div class="panel-heading">Weight Trend</div>
+            <div id="trend-panel-content"></div>
+        </div>
+    </div>
+
+    <div class="panel-dots">
+        <div class="panel-dot active" data-dot="0"></div>
+        <div class="panel-dot" data-dot="1"></div>
+        <div class="panel-dot" data-dot="2"></div>
+        <div class="panel-dot" data-dot="3"></div>
+    </div>
+
+    <div class="hint" id="exit-hint">Tap anywhere to exit fullscreen · Esc also works</div>
+</div>
+
+<script type="module" src="dashboard.js?v=1"></script>
+</body>
+</html>
