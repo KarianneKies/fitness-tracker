@@ -13,6 +13,14 @@ Endpoints:
 - GET /foods/search: Search local food references (USDA + user-added) by description
 - POST /foods/label-scan: Extract product name/macros from a nutrition label photo
 - POST /foods/custom: Save a user-reviewed custom product
+- PATCH /foods/custom/{id}: Update a custom product
+- DELETE /foods/custom/{id}: Delete a custom product
+- PATCH /foods/usda/{id}: Save a correction to a USDA food's name/macros
+- DELETE /foods/usda/{id}/override: Revert a USDA food to its original values
+- POST /foods/servings: Define a custom serving size for a food
+- GET /foods/servings: List a food's servings
+- PATCH /foods/servings/{id}: Update a serving
+- DELETE /foods/servings/{id}: Delete a serving
 - POST /meals: Save a meal with its food items (e.g. from manual food search)
 - GET /meals: List all meals with their food items and totals
 - GET /meals/{id}: Get one meal with all food items and totals
@@ -43,7 +51,7 @@ from sqlalchemy import case, func
 
 from .config import FRONTEND_DIR, PHOTOS_DIR, HAND_MEASUREMENTS
 from .database import create_db_and_tables, get_session
-from .models import Workout, Exercise, ExerciseSet, Food, UserFood, Meal, FoodItem as FoodItemModel, WeeklyCheckin, Goal
+from .models import Workout, Exercise, ExerciseSet, Food, UserFood, FoodServing, FoodOverride, Meal, FoodItem as FoodItemModel, WeeklyCheckin, Goal
 from .vision import analyze_food_photo as vision_analyze
 from .vision import analyze_nutrition_label as vision_analyze_label
 from .muscle_groups import guess_muscle_group
@@ -550,6 +558,13 @@ async def analyze_food_photo(photo: UploadFile = File(...)):
 
 
 # ========== Food Search Models ==========
+class FoodServingResponse(BaseModel):
+    """A custom serving size defined for a food, e.g. '1 rice cake = 9g'."""
+    id: int
+    label: str
+    grams_per_unit: float
+
+
 class FoodSearchResult(BaseModel):
     """A food reference match (USDA or user-added), with per-100g macros."""
     id: int
@@ -559,6 +574,27 @@ class FoodSearchResult(BaseModel):
     carbs_g: float
     fat_g: float
     source: str  # "usda" or "custom"
+    servings: List[FoodServingResponse] = []
+
+
+def _servings_for_foods(session, usda_ids: List[int], custom_ids: List[int]) -> dict:
+    """Batch-fetch servings for a set of foods, keyed by (food_id, food_source)."""
+    by_key: dict = {}
+    if usda_ids:
+        for s in session.query(FoodServing).filter(
+            FoodServing.food_source == "usda", FoodServing.food_id.in_(usda_ids)
+        ).all():
+            by_key.setdefault((s.food_id, s.food_source), []).append(
+                FoodServingResponse(id=s.id, label=s.label, grams_per_unit=s.grams_per_unit)
+            )
+    if custom_ids:
+        for s in session.query(FoodServing).filter(
+            FoodServing.food_source == "custom", FoodServing.food_id.in_(custom_ids)
+        ).all():
+            by_key.setdefault((s.food_id, s.food_source), []).append(
+                FoodServingResponse(id=s.id, label=s.label, grams_per_unit=s.grams_per_unit)
+            )
+    return by_key
 
 
 def _rank_match(description: str, query: str) -> int:
@@ -623,15 +659,26 @@ async def search_foods(q: str):
             .all()
         )
 
+        servings_by_key = _servings_for_foods(
+            session, [f.id for f in usda_foods], [f.id for f in user_foods]
+        )
+
+        usda_ids = [f.id for f in usda_foods]
+        overrides_by_food_id = {}
+        if usda_ids:
+            for o in session.query(FoodOverride).filter(FoodOverride.food_id.in_(usda_ids)).all():
+                overrides_by_food_id[o.food_id] = o
+
         results = [
             FoodSearchResult(
                 id=food.id,
-                description=food.description,
-                calories_kcal=food.calories_kcal,
-                protein_g=food.protein_g,
-                carbs_g=food.carbs_g,
-                fat_g=food.fat_g,
+                description=(overrides_by_food_id[food.id].description if food.id in overrides_by_food_id else food.description),
+                calories_kcal=(overrides_by_food_id[food.id].calories_kcal if food.id in overrides_by_food_id else food.calories_kcal),
+                protein_g=(overrides_by_food_id[food.id].protein_g if food.id in overrides_by_food_id else food.protein_g),
+                carbs_g=(overrides_by_food_id[food.id].carbs_g if food.id in overrides_by_food_id else food.carbs_g),
+                fat_g=(overrides_by_food_id[food.id].fat_g if food.id in overrides_by_food_id else food.fat_g),
                 source="usda",
+                servings=servings_by_key.get((food.id, "usda"), []),
             )
             for food in usda_foods
         ] + [
@@ -643,6 +690,7 @@ async def search_foods(q: str):
                 carbs_g=food.carbs_g,
                 fat_g=food.fat_g,
                 source="custom",
+                servings=servings_by_key.get((food.id, "custom"), []),
             )
             for food in user_foods
         ]
@@ -742,6 +790,270 @@ async def create_custom_food(food: CustomFoodCreate):
         )
 
 
+@app.patch("/foods/custom/{food_id}", response_model=FoodSearchResult)
+async def update_custom_food(food_id: int, food: CustomFoodCreate):
+    """
+    Update a previously-added custom product (name and/or per-100g macros).
+
+    Args:
+        food_id: The id of the UserFood row to update
+        food: CustomFoodCreate with the corrected name and per-100g macros
+
+    Returns:
+        FoodSearchResult: The updated product, source="custom"
+    """
+    description = food.description.strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="Product name is required")
+
+    with get_session() as session:
+        db_food = session.query(UserFood).filter(UserFood.id == food_id).first()
+        if not db_food:
+            raise HTTPException(status_code=404, detail="Product not found")
+
+        db_food.description = description
+        db_food.calories_kcal = food.calories_kcal
+        db_food.protein_g = food.protein_g
+        db_food.carbs_g = food.carbs_g
+        db_food.fat_g = food.fat_g
+        session.commit()
+        session.refresh(db_food)
+
+        return FoodSearchResult(
+            id=db_food.id,
+            description=db_food.description,
+            calories_kcal=db_food.calories_kcal,
+            protein_g=db_food.protein_g,
+            carbs_g=db_food.carbs_g,
+            fat_g=db_food.fat_g,
+            source="custom",
+        )
+
+
+@app.delete("/foods/custom/{food_id}")
+async def delete_custom_food(food_id: int):
+    """
+    Delete a custom product (and any servings defined for it).
+
+    Args:
+        food_id: The id of the UserFood row to delete
+
+    Returns:
+        dict: Success message
+    """
+    with get_session() as session:
+        db_food = session.query(UserFood).filter(UserFood.id == food_id).first()
+        if not db_food:
+            raise HTTPException(status_code=404, detail="Product not found")
+
+        session.query(FoodServing).filter(
+            FoodServing.food_id == food_id, FoodServing.food_source == "custom"
+        ).delete(synchronize_session=False)
+
+        session.delete(db_food)
+        session.commit()
+
+        return {"message": "Product deleted successfully"}
+
+
+@app.patch("/foods/usda/{food_id}", response_model=FoodSearchResult)
+async def update_usda_food(food_id: int, food: CustomFoodCreate):
+    """
+    Save a correction to a USDA food's name/macros.
+
+    Stored as a separate override row rather than editing the Food table
+    directly, since import_usda.py clears and reloads that whole table on
+    every run - a direct edit would vanish on the next USDA refresh. Search
+    results apply the override on top of the base USDA row automatically.
+
+    Args:
+        food_id: The id of the Food row to correct
+        food: CustomFoodCreate with the corrected name and per-100g macros
+
+    Returns:
+        FoodSearchResult: The food with the override applied, source="usda"
+    """
+    description = food.description.strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="Food name is required")
+
+    with get_session() as session:
+        base_food = session.query(Food).filter(Food.id == food_id).first()
+        if not base_food:
+            raise HTTPException(status_code=404, detail="Food not found")
+
+        override = session.query(FoodOverride).filter(FoodOverride.food_id == food_id).first()
+        if override is None:
+            override = FoodOverride(food_id=food_id, food_source="usda", description=description,
+                                     calories_kcal=food.calories_kcal, protein_g=food.protein_g,
+                                     carbs_g=food.carbs_g, fat_g=food.fat_g)
+            session.add(override)
+        else:
+            override.description = description
+            override.calories_kcal = food.calories_kcal
+            override.protein_g = food.protein_g
+            override.carbs_g = food.carbs_g
+            override.fat_g = food.fat_g
+
+        session.commit()
+        session.refresh(override)
+
+        return FoodSearchResult(
+            id=food_id,
+            description=override.description,
+            calories_kcal=override.calories_kcal,
+            protein_g=override.protein_g,
+            carbs_g=override.carbs_g,
+            fat_g=override.fat_g,
+            source="usda",
+        )
+
+
+@app.delete("/foods/usda/{food_id}/override")
+async def reset_usda_food(food_id: int):
+    """
+    Discard a correction and revert a USDA food back to its original
+    imported name/macros.
+
+    Args:
+        food_id: The id of the Food row to reset
+
+    Returns:
+        dict: Success message
+    """
+    with get_session() as session:
+        override = session.query(FoodOverride).filter(FoodOverride.food_id == food_id).first()
+        if not override:
+            raise HTTPException(status_code=404, detail="No correction exists for this food")
+
+        session.delete(override)
+        session.commit()
+
+        return {"message": "Reverted to the original USDA values"}
+
+
+# ========== Food Serving Models ==========
+class FoodServingCreate(BaseModel):
+    """Request model for defining a custom serving size for a food."""
+    food_id: int
+    food_source: str  # "usda" or "custom"
+    label: str
+    grams_per_unit: float
+
+
+class FoodServingUpdate(BaseModel):
+    """Request model for updating a serving's label/grams_per_unit."""
+    label: str
+    grams_per_unit: float
+
+
+# ========== Food Serving Endpoints ==========
+@app.post("/foods/servings", response_model=FoodServingResponse)
+async def create_food_serving(serving: FoodServingCreate):
+    """
+    Define a custom serving size for a food (e.g. "1 rice cake = 9g"), so
+    amounts can be logged as a count of servings instead of grams.
+
+    Args:
+        serving: FoodServingCreate with the food reference, label, and grams per unit
+
+    Returns:
+        FoodServingResponse: The saved serving
+    """
+    label = serving.label.strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="Serving label is required")
+    if serving.food_source not in ("usda", "custom"):
+        raise HTTPException(status_code=400, detail="food_source must be 'usda' or 'custom'")
+    if serving.grams_per_unit <= 0:
+        raise HTTPException(status_code=400, detail="grams_per_unit must be greater than 0")
+
+    with get_session() as session:
+        db_serving = FoodServing(
+            food_id=serving.food_id,
+            food_source=serving.food_source,
+            label=label,
+            grams_per_unit=serving.grams_per_unit,
+        )
+        session.add(db_serving)
+        session.commit()
+        session.refresh(db_serving)
+
+        return FoodServingResponse(id=db_serving.id, label=db_serving.label, grams_per_unit=db_serving.grams_per_unit)
+
+
+@app.get("/foods/servings", response_model=List[FoodServingResponse])
+async def list_food_servings(food_id: int, food_source: str):
+    """
+    List the servings defined for a food.
+
+    Args:
+        food_id: id of the food in its source table
+        food_source: "usda" or "custom"
+
+    Returns:
+        List[FoodServingResponse]: The food's servings
+    """
+    with get_session() as session:
+        servings = session.query(FoodServing).filter(
+            FoodServing.food_id == food_id, FoodServing.food_source == food_source
+        ).all()
+        return [FoodServingResponse(id=s.id, label=s.label, grams_per_unit=s.grams_per_unit) for s in servings]
+
+
+@app.patch("/foods/servings/{serving_id}", response_model=FoodServingResponse)
+async def update_food_serving(serving_id: int, serving: FoodServingUpdate):
+    """
+    Update a serving's label and/or grams per unit.
+
+    Args:
+        serving_id: The ID of the serving to update
+        serving: FoodServingUpdate with the corrected label and grams per unit
+
+    Returns:
+        FoodServingResponse: The updated serving
+    """
+    label = serving.label.strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="Serving label is required")
+    if serving.grams_per_unit <= 0:
+        raise HTTPException(status_code=400, detail="grams_per_unit must be greater than 0")
+
+    with get_session() as session:
+        db_serving = session.query(FoodServing).filter(FoodServing.id == serving_id).first()
+        if not db_serving:
+            raise HTTPException(status_code=404, detail="Serving not found")
+
+        db_serving.label = label
+        db_serving.grams_per_unit = serving.grams_per_unit
+        session.commit()
+        session.refresh(db_serving)
+
+        return FoodServingResponse(id=db_serving.id, label=db_serving.label, grams_per_unit=db_serving.grams_per_unit)
+
+
+@app.delete("/foods/servings/{serving_id}")
+async def delete_food_serving(serving_id: int):
+    """
+    Delete a custom serving size.
+
+    Args:
+        serving_id: The ID of the serving to delete
+
+    Returns:
+        dict: Success message
+    """
+    with get_session() as session:
+        serving = session.query(FoodServing).filter(FoodServing.id == serving_id).first()
+        if not serving:
+            raise HTTPException(status_code=404, detail="Serving not found")
+
+        session.delete(serving)
+        session.commit()
+
+        return {"message": "Serving deleted successfully"}
+
+
 # ========== Meal Models ==========
 class MealFoodItemCreate(BaseModel):
     """A single food item to add to a meal, with macros already scaled to the eaten portion."""
@@ -753,6 +1065,8 @@ class MealFoodItemCreate(BaseModel):
     protein_g: float
     carbs_g: float
     fat_g: float
+    serving_label: Optional[str] = None  # e.g. "rice cake", if logged via a serving instead of raw grams
+    serving_count: Optional[float] = None  # e.g. 3, pairs with serving_label
 
 
 class MealCreate(BaseModel):
@@ -773,6 +1087,8 @@ class MealFoodItemResponse(BaseModel):
     carbs_g: Optional[float]
     fat_g: Optional[float]
     source: Optional[str]
+    serving_label: Optional[str] = None
+    serving_count: Optional[float] = None
 
 
 class MealResponse(BaseModel):
@@ -832,6 +1148,8 @@ async def create_meal(meal: MealCreate):
                 fat_g=item.fat_g,
                 source="search",
                 fdc_id=item.fdc_id,
+                serving_label=item.serving_label,
+                serving_count=item.serving_count,
             )
             session.add(db_item)
             session.commit()
@@ -847,6 +1165,8 @@ async def create_meal(meal: MealCreate):
                 carbs_g=db_item.carbs_g,
                 fat_g=db_item.fat_g,
                 source=db_item.source,
+                serving_label=db_item.serving_label,
+                serving_count=db_item.serving_count,
             ))
             total_calories += item.calories
             total_protein_g += item.protein_g
@@ -893,6 +1213,8 @@ async def get_meals():
                     carbs_g=item.carbs_g,
                     fat_g=item.fat_g,
                     source=item.source,
+                    serving_label=item.serving_label,
+                    serving_count=item.serving_count,
                 )
                 for item in items
             ]
@@ -943,6 +1265,8 @@ async def get_meal(meal_id: int):
                 carbs_g=item.carbs_g,
                 fat_g=item.fat_g,
                 source=item.source,
+                serving_label=item.serving_label,
+                serving_count=item.serving_count,
             )
             for item in items
         ]
@@ -1011,6 +1335,8 @@ async def update_meal(meal_id: int, meal_update: MealCreate):
                         fat_g=item_data.fat_g,
                         source="search",
                         fdc_id=item_data.fdc_id,
+                        serving_label=item_data.serving_label,
+                        serving_count=item_data.serving_count,
                     )
                     session.add(db_item)
                 else:
@@ -1022,6 +1348,8 @@ async def update_meal(meal_id: int, meal_update: MealCreate):
                     db_item.carbs_g = item_data.carbs_g
                     db_item.fat_g = item_data.fat_g
                     db_item.fdc_id = item_data.fdc_id
+                    db_item.serving_label = item_data.serving_label
+                    db_item.serving_count = item_data.serving_count
 
                 session.commit()
                 session.refresh(db_item)
@@ -1050,6 +1378,8 @@ async def update_meal(meal_id: int, meal_update: MealCreate):
                 carbs_g=item.carbs_g,
                 fat_g=item.fat_g,
                 source=item.source,
+                serving_label=item.serving_label,
+                serving_count=item.serving_count,
             )
             for item in items
         ]

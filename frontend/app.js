@@ -2015,6 +2015,12 @@ const foodSearch = {
         addView.id = 'food-add-product-view';
         addView.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; padding: 1rem;';
 
+        // Amount view (hidden until a search result is tapped): choose grams
+        // or a defined serving, and optionally define a new serving here
+        const amountView = document.createElement('div');
+        amountView.id = 'food-amount-view';
+        amountView.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; padding: 1rem;';
+
         const footer = document.createElement('div');
         footer.style.cssText = 'padding: 1rem; border-top: 1px solid #eee;';
 
@@ -2027,6 +2033,7 @@ const foodSearch = {
         content.appendChild(header);
         content.appendChild(searchView);
         content.appendChild(addView);
+        content.appendChild(amountView);
         content.appendChild(footer);
         modal.appendChild(content);
         document.body.appendChild(modal);
@@ -2076,7 +2083,10 @@ const foodSearch = {
             <div class="food-search-result" data-index="${index}" style="padding: 0.75rem; border-bottom: 1px solid #f0f0f0; cursor: pointer;">
                 <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem;">
                     <div style="font-weight: bold; color: #1a1a2e;">${this.escapeHtml(food.description)}</div>
-                    <span style="flex-shrink: 0; font-size: 0.65rem; padding: 0.15rem 0.4rem; border-radius: 4px; color: white; white-space: nowrap; background: ${food.source === 'custom' ? '#e94560' : '#1a1a2e'};">${food.source === 'custom' ? 'YOURS' : 'USDA'}</span>
+                    <div style="flex-shrink: 0; display: flex; align-items: center; gap: 0.4rem;">
+                        <span style="font-size: 0.65rem; padding: 0.15rem 0.4rem; border-radius: 4px; color: white; white-space: nowrap; background: ${food.source === 'custom' ? '#e94560' : '#1a1a2e'};">${food.source === 'custom' ? 'YOURS' : 'USDA'}</span>
+                        <button type="button" class="edit-custom-food-btn" data-index="${index}" title="Edit this food" style="background: none; border: none; color: #666; cursor: pointer; font-size: 0.9rem; padding: 0;">✎</button>
+                    </div>
                 </div>
                 <div style="font-size: 0.8rem; color: #666; margin-top: 0.25rem;">
                     ${Math.round(food.calories_kcal)} kcal · ${food.protein_g.toFixed(1)}g P · ${food.carbs_g.toFixed(1)}g C · ${food.fat_g.toFixed(1)}g F
@@ -2091,33 +2101,263 @@ const foodSearch = {
                 this.selectFood(food);
             });
         });
+
+        list.querySelectorAll('.edit-custom-food-btn').forEach((btn) => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const food = results[parseInt(btn.dataset.index, 10)];
+                this.showEditProductView(food);
+            });
+        });
     },
 
     /**
-     * Handle picking a food from search results: ask for a portion in grams,
-     * and add it to the meal being built (per-100g macros kept as-is so the
-     * portion can be edited later without losing precision)
+     * Handle picking a food from search results: open the amount view so the
+     * user can choose grams or a defined serving (e.g. "3 rice cakes")
+     * before it's added to the meal being built.
      */
     selectFood(food) {
-        const input = window.prompt(`How many grams of "${food.description}"?`, '100');
-        if (input === null) return;
+        this.showAmountView(food);
+    },
 
-        const grams = parseFloat(input);
-        if (isNaN(grams) || grams <= 0) {
-            alert('Please enter a valid number of grams.');
+    /**
+     * Show the amount-entry view for a food: grams by default, or any
+     * defined serving as a selectable "unit", plus a way to define a new
+     * serving right here. food.servings is mutated in place as servings are
+     * added/removed so the chip list stays in sync without re-searching.
+     */
+    showAmountView(food) {
+        this.amountFood = food;
+        this.amountUnit = 'grams';
+
+        const searchView = document.getElementById('food-search-view');
+        const addView = document.getElementById('food-add-product-view');
+        const amountView = document.getElementById('food-amount-view');
+        if (searchView) searchView.style.display = 'none';
+        if (addView) addView.style.display = 'none';
+        if (!amountView) return;
+        amountView.style.display = 'flex';
+
+        amountView.innerHTML = `
+            <button id="back-to-search-from-amount-btn" style="align-self: flex-start; background: none; border: none; color: #666; cursor: pointer; font-size: 0.9rem; margin-bottom: 0.75rem; padding: 0;">← Back to search</button>
+
+            <div style="font-weight: bold; font-size: 1.05rem; color: #1a1a2e; margin-bottom: 0.25rem;">${this.escapeHtml(food.description)}</div>
+            <div style="font-size: 0.8rem; color: #999; margin-bottom: 1rem;">
+                ${Math.round(food.calories_kcal)} kcal · ${food.protein_g.toFixed(1)}g P · ${food.carbs_g.toFixed(1)}g C · ${food.fat_g.toFixed(1)}g F
+                <span style="color: #999;">(per 100g)</span>
+            </div>
+
+            <label style="font-size: 0.85rem; color: #666;">Amount</label>
+            <div id="unit-chips" style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.4rem 0 0.75rem;"></div>
+
+            <input type="number" step="any" min="0" id="amount-value-input" value="100" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.5rem;">
+
+            <div id="amount-preview" style="font-size: 0.85rem; color: #666; margin-bottom: 1rem;"></div>
+
+            <button id="toggle-new-serving-btn" style="background: none; border: none; color: #e94560; cursor: pointer; font-size: 0.85rem; padding: 0; margin-bottom: 0.75rem; text-align: left;">+ Define a new serving</button>
+
+            <div id="new-serving-form" style="display: none; margin-bottom: 0.75rem;">
+                <input type="text" id="new-serving-label-input" placeholder="Label (e.g. rice cake)" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.5rem;">
+                <input type="number" step="any" min="0" id="new-serving-grams-input" placeholder="Grams per unit (e.g. 9)" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.5rem;">
+                <button id="save-new-serving-btn" class="btn btn-secondary">Save Serving</button>
+            </div>
+
+            <button id="confirm-amount-btn" class="btn" style="margin-top: 0.5rem;">Add to Meal</button>
+        `;
+
+        document.getElementById('back-to-search-from-amount-btn').addEventListener('click', () => this.showSearchView());
+        document.getElementById('amount-value-input').addEventListener('input', () => this.updateAmountPreview());
+        document.getElementById('toggle-new-serving-btn').addEventListener('click', () => this.toggleNewServingForm());
+        document.getElementById('save-new-serving-btn').addEventListener('click', () => this.saveNewServing());
+        document.getElementById('confirm-amount-btn').addEventListener('click', () => this.confirmAmount());
+
+        this.renderUnitChips();
+        this.updateAmountPreview();
+    },
+
+    /**
+     * Render the "Grams" + one chip per defined serving. Tapping a serving
+     * chip switches the active unit; tapping its × deletes the serving.
+     */
+    renderUnitChips() {
+        const container = document.getElementById('unit-chips');
+        if (!container || !this.amountFood) return;
+
+        const chipStyle = (active) => `
+            display: inline-flex; align-items: center; gap: 0.35rem;
+            padding: 0.4rem 0.75rem; border-radius: 999px; border: 1px solid ${active ? '#e94560' : '#ddd'};
+            background: ${active ? '#e94560' : 'white'}; color: ${active ? 'white' : '#333'};
+            font-size: 0.85rem; cursor: pointer;
+        `;
+
+        const units = [{ unit: 'grams', label: 'Grams' }].concat(
+            (this.amountFood.servings || []).map((s) => ({ unit: `serving-${s.id}`, label: s.label, servingId: s.id }))
+        );
+
+        container.innerHTML = units.map((u) => `
+            <button type="button" class="unit-chip" data-unit="${u.unit}" style="${chipStyle(u.unit === this.amountUnit)}">
+                ${this.escapeHtml(u.label)}
+                ${u.servingId ? `<span class="delete-serving-chip" data-serving-id="${u.servingId}" style="color: ${u.unit === this.amountUnit ? 'white' : '#dc3545'}; font-weight: bold;">×</span>` : ''}
+            </button>
+        `).join('');
+
+        container.querySelectorAll('.unit-chip').forEach((chip) => {
+            chip.addEventListener('click', (e) => {
+                // Ignore clicks on the × (handled separately below)
+                if (e.target.classList.contains('delete-serving-chip')) return;
+                this.amountUnit = chip.dataset.unit;
+                const valueInput = document.getElementById('amount-value-input');
+                if (valueInput) valueInput.value = this.amountUnit === 'grams' ? '100' : '1';
+                this.renderUnitChips();
+                this.updateAmountPreview();
+            });
+        });
+
+        container.querySelectorAll('.delete-serving-chip').forEach((btn) => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.deleteServing(parseInt(btn.dataset.servingId, 10));
+            });
+        });
+    },
+
+    /**
+     * Compute grams for the current unit + amount value: the raw number for
+     * "Grams", or count × grams_per_unit for a selected serving.
+     */
+    computeAmountGrams() {
+        const valueInput = document.getElementById('amount-value-input');
+        const value = valueInput ? parseFloat(valueInput.value) : NaN;
+        if (isNaN(value) || value <= 0) return null;
+
+        if (this.amountUnit === 'grams') return { grams: value, servingLabel: null, servingCount: null };
+
+        const servingId = parseInt(this.amountUnit.replace('serving-', ''), 10);
+        const serving = (this.amountFood.servings || []).find((s) => s.id === servingId);
+        if (!serving) return null;
+
+        return { grams: value * serving.grams_per_unit, servingLabel: serving.label, servingCount: value };
+    },
+
+    /**
+     * Live preview: "= 27g · 100 kcal · ..." as the amount/unit changes
+     */
+    updateAmountPreview() {
+        const previewEl = document.getElementById('amount-preview');
+        if (!previewEl || !this.amountFood) return;
+
+        const result = this.computeAmountGrams();
+        if (!result) {
+            previewEl.textContent = 'Enter a valid amount.';
+            return;
+        }
+
+        const scale = result.grams / 100;
+        const cal = this.amountFood.calories_kcal * scale;
+        const pro = this.amountFood.protein_g * scale;
+        const carb = this.amountFood.carbs_g * scale;
+        const fat = this.amountFood.fat_g * scale;
+
+        previewEl.textContent = `= ${Math.round(result.grams * 10) / 10}g · ${Math.round(cal)} kcal · ${pro.toFixed(1)}g P · ${carb.toFixed(1)}g C · ${fat.toFixed(1)}g F`;
+    },
+
+    toggleNewServingForm() {
+        const form = document.getElementById('new-serving-form');
+        if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
+    },
+
+    /**
+     * Save a new serving for the food currently being amounted, via
+     * POST /foods/servings, then add it to the chip list immediately.
+     */
+    async saveNewServing() {
+        const labelInput = document.getElementById('new-serving-label-input');
+        const gramsInput = document.getElementById('new-serving-grams-input');
+        const label = labelInput ? labelInput.value.trim() : '';
+        const gramsPerUnit = gramsInput ? parseFloat(gramsInput.value) : NaN;
+
+        if (!label) {
+            alert('Please enter a label for the serving.');
+            return;
+        }
+        if (isNaN(gramsPerUnit) || gramsPerUnit <= 0) {
+            alert('Please enter how many grams one unit weighs.');
+            return;
+        }
+
+        try {
+            const serving = await api.post('/foods/servings', {
+                food_id: this.amountFood.id,
+                food_source: this.amountFood.source,
+                label,
+                grams_per_unit: gramsPerUnit,
+            });
+
+            if (!this.amountFood.servings) this.amountFood.servings = [];
+            this.amountFood.servings.push(serving);
+
+            labelInput.value = '';
+            gramsInput.value = '';
+            this.toggleNewServingForm();
+
+            // Switch straight to the newly-defined serving
+            this.amountUnit = `serving-${serving.id}`;
+            const valueInput = document.getElementById('amount-value-input');
+            if (valueInput) valueInput.value = '1';
+
+            this.renderUnitChips();
+            this.updateAmountPreview();
+        } catch (error) {
+            console.error('Error saving serving:', error);
+            alert('Failed to save serving');
+        }
+    },
+
+    /**
+     * Delete a serving via DELETE /foods/servings/{id}
+     */
+    async deleteServing(servingId) {
+        if (!confirm('Delete this serving?')) return;
+
+        try {
+            await api.delete(`/foods/servings/${servingId}`);
+            this.amountFood.servings = (this.amountFood.servings || []).filter((s) => s.id !== servingId);
+            if (this.amountUnit === `serving-${servingId}`) {
+                this.amountUnit = 'grams';
+                const valueInput = document.getElementById('amount-value-input');
+                if (valueInput) valueInput.value = '100';
+            }
+            this.renderUnitChips();
+            this.updateAmountPreview();
+        } catch (error) {
+            console.error('Error deleting serving:', error);
+            alert('Failed to delete serving');
+        }
+    },
+
+    /**
+     * Add the food to the meal being built at the chosen amount, then close
+     * the search modal (mirrors the old selectFood's end-of-flow behavior)
+     */
+    confirmAmount() {
+        const result = this.computeAmountGrams();
+        if (!result) {
+            alert('Please enter a valid amount.');
             return;
         }
 
         this.items.push({
-            fdc_id: food.id,
-            name: food.description,
-            grams,
+            fdc_id: this.amountFood.id,
+            name: this.amountFood.description,
+            grams: result.grams,
             per100: {
-                calories: food.calories_kcal,
-                protein_g: food.protein_g,
-                carbs_g: food.carbs_g,
-                fat_g: food.fat_g,
+                calories: this.amountFood.calories_kcal,
+                protein_g: this.amountFood.protein_g,
+                carbs_g: this.amountFood.carbs_g,
+                fat_g: this.amountFood.fat_g,
             },
+            servingLabel: result.servingLabel,
+            servingCount: result.servingCount,
         });
 
         const modal = document.getElementById('food-search-modal');
@@ -2132,6 +2372,11 @@ const foodSearch = {
      * the product the user wants.
      */
     showAddProductView() {
+        this.editingFoodId = null;
+        this.editingFoodSource = null;
+        this.editingFood = null;
+        this.editingServingId = null;
+
         const searchView = document.getElementById('food-search-view');
         const addView = document.getElementById('food-add-product-view');
         if (searchView) searchView.style.display = 'none';
@@ -2154,13 +2399,266 @@ const foodSearch = {
     },
 
     /**
-     * Return to the search results view from the add-product view
+     * Return to the search results view from the add-product or amount view
      */
     showSearchView() {
         const searchView = document.getElementById('food-search-view');
         const addView = document.getElementById('food-add-product-view');
+        const amountView = document.getElementById('food-amount-view');
         if (addView) addView.style.display = 'none';
+        if (amountView) amountView.style.display = 'none';
         if (searchView) searchView.style.display = 'flex';
+    },
+
+    /**
+     * Switch the search modal to "edit this food" - works for both your own
+     * custom products (source="custom") and USDA foods (source="usda").
+     * Reuses the same review form as adding a product, pre-filled with the
+     * food's current values.
+     */
+    showEditProductView(food) {
+        this.editingFoodId = food.id;
+        this.editingFoodSource = food.source;
+        this.editingFood = food; // kept around so serving add/edit/delete can mutate food.servings in place
+        this.editingServingId = null;
+
+        const searchView = document.getElementById('food-search-view');
+        const addView = document.getElementById('food-add-product-view');
+        if (searchView) searchView.style.display = 'none';
+        if (!addView) return;
+        addView.style.display = 'flex';
+
+        const usdaNote = food.source === 'usda'
+            ? `<p style="font-size: 0.8rem; color: #999; margin-bottom: 0.75rem;">This is USDA reference data. Your edit is saved as a personal correction and won't be lost if the USDA dataset is ever refreshed.</p>`
+            : '';
+
+        addView.innerHTML = `
+            <button id="back-to-search-btn" style="align-self: flex-start; background: none; border: none; color: #666; cursor: pointer; font-size: 0.9rem; margin-bottom: 0.75rem; padding: 0;">← Back to search</button>
+            <p style="font-size: 0.9rem; color: #666; margin-bottom: 0.75rem;">Edit this food's details.</p>
+            ${usdaNote}
+            <div id="add-product-form"></div>
+        `;
+
+        document.getElementById('back-to-search-btn').addEventListener('click', () => this.showSearchView());
+
+        this.renderEditProductForm(food);
+    },
+
+    /**
+     * Render the review form pre-filled with a food's current values (as
+     * opposed to renderAddProductForm, which pre-fills from a freshly-
+     * scanned label). Custom products get a Delete option; USDA foods get a
+     * Revert option instead (deleting official reference data doesn't make
+     * sense - reverting the correction does).
+     */
+    renderEditProductForm(food) {
+        const formEl = document.getElementById('add-product-form');
+        if (!formEl) return;
+
+        const fieldStyle = 'width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.5rem;';
+        const labelStyle = 'font-size: 0.85rem; color: #666;';
+        const isUsda = food.source === 'usda';
+
+        formEl.innerHTML = `
+            <label style="${labelStyle}">${isUsda ? 'Food name' : 'Product name'}</label>
+            <input type="text" id="product-name-input" value="${this.escapeHtml(food.description)}" style="${fieldStyle}">
+
+            <p style="font-size: 0.8rem; color: #999; margin-bottom: 0.5rem;">Per 100g:</p>
+
+            <label style="${labelStyle}">Calories (kcal)</label>
+            <input type="number" step="any" id="product-calories-input" value="${food.calories_kcal}" style="${fieldStyle}">
+
+            <label style="${labelStyle}">Protein (g)</label>
+            <input type="number" step="any" id="product-protein-input" value="${food.protein_g}" style="${fieldStyle}">
+
+            <label style="${labelStyle}">Carbs (g)</label>
+            <input type="number" step="any" id="product-carbs-input" value="${food.carbs_g}" style="${fieldStyle}">
+
+            <label style="${labelStyle}">Fat (g)</label>
+            <input type="number" step="any" id="product-fat-input" value="${food.fat_g}" style="${fieldStyle}">
+
+            <div style="margin: 0.75rem 0 1rem; padding-top: 0.75rem; border-top: 1px solid #eee;">
+                <label style="${labelStyle}">Servings</label>
+                <div id="edit-servings-list" style="margin: 0.5rem 0;"></div>
+                <button type="button" id="toggle-new-serving-in-edit-btn" style="background: none; border: none; color: #e94560; cursor: pointer; font-size: 0.85rem; padding: 0; text-align: left;">+ Add a serving</button>
+                <div id="new-serving-in-edit-form" style="display: none; margin-top: 0.5rem;">
+                    <input type="text" id="edit-new-serving-label-input" placeholder="Label (e.g. rice cake)" style="${fieldStyle}">
+                    <input type="number" step="any" min="0" id="edit-new-serving-grams-input" placeholder="Grams per unit (e.g. 9)" style="${fieldStyle}">
+                    <button type="button" id="save-new-serving-in-edit-btn" class="btn btn-secondary">Save Serving</button>
+                </div>
+            </div>
+
+            <button id="save-product-btn" class="btn" style="margin-top: 0.5rem;">Save Changes</button>
+            ${isUsda
+                ? `<button id="revert-product-btn" class="btn btn-secondary" style="margin-top: 0.5rem;">Revert to Original USDA Values</button>`
+                : `<button id="delete-product-btn" class="btn btn-danger" style="margin-top: 0.5rem;">Delete Product</button>`}
+        `;
+
+        document.getElementById('save-product-btn').addEventListener('click', () => this.saveCustomProduct());
+        if (isUsda) {
+            document.getElementById('revert-product-btn').addEventListener('click', () => this.revertUsdaFood());
+        } else {
+            document.getElementById('delete-product-btn').addEventListener('click', () => this.deleteCustomProduct());
+        }
+
+        document.getElementById('toggle-new-serving-in-edit-btn').addEventListener('click', () => {
+            const form = document.getElementById('new-serving-in-edit-form');
+            if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
+        });
+        document.getElementById('save-new-serving-in-edit-btn').addEventListener('click', () => this.addServingInEdit());
+
+        this.renderEditServingsList();
+    },
+
+    /**
+     * Render the servings list within the edit-food form: each serving shows
+     * as "label = Ng" with ✎/× actions, or as an inline label+grams editor
+     * when it's the one currently being edited (editingServingId)
+     */
+    renderEditServingsList() {
+        const listEl = document.getElementById('edit-servings-list');
+        if (!listEl || !this.editingFood) return;
+
+        const servings = this.editingFood.servings || [];
+        if (servings.length === 0) {
+            listEl.innerHTML = '<p style="font-size: 0.85rem; color: #999;">No servings defined yet.</p>';
+            return;
+        }
+
+        const fieldStyle = 'padding: 0.4rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.85rem;';
+
+        listEl.innerHTML = servings.map((s) => {
+            if (this.editingServingId === s.id) {
+                return `
+                    <div style="display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem;">
+                        <input type="text" id="inline-serving-label-input" value="${this.escapeHtml(s.label)}" style="${fieldStyle} flex: 1;">
+                        <input type="number" step="any" min="0" id="inline-serving-grams-input" value="${s.grams_per_unit}" style="${fieldStyle} width: 64px;">
+                        <span style="font-size: 0.8rem; color: #666;">g</span>
+                        <button type="button" class="save-serving-inline-btn" data-serving-id="${s.id}" style="background: none; border: none; color: #2e7d32; cursor: pointer; font-size: 1rem; padding: 0 0.25rem;">✓</button>
+                        <button type="button" class="cancel-serving-inline-btn" style="background: none; border: none; color: #666; cursor: pointer; font-size: 1rem; padding: 0 0.25rem;">×</button>
+                    </div>
+                `;
+            }
+            return `
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; font-size: 0.85rem;">
+                    <span>${this.escapeHtml(s.label)} = ${s.grams_per_unit}g</span>
+                    <span>
+                        <button type="button" class="edit-serving-inline-btn" data-serving-id="${s.id}" style="background: none; border: none; color: #666; cursor: pointer; font-size: 0.85rem; padding: 0 0.35rem;">✎</button>
+                        <button type="button" class="delete-serving-inline-btn" data-serving-id="${s.id}" style="background: none; border: none; color: #dc3545; cursor: pointer; font-size: 0.95rem; padding: 0 0.35rem;">×</button>
+                    </span>
+                </div>
+            `;
+        }).join('');
+
+        listEl.querySelectorAll('.edit-serving-inline-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                this.editingServingId = parseInt(btn.dataset.servingId, 10);
+                this.renderEditServingsList();
+            });
+        });
+        listEl.querySelectorAll('.cancel-serving-inline-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                this.editingServingId = null;
+                this.renderEditServingsList();
+            });
+        });
+        listEl.querySelectorAll('.save-serving-inline-btn').forEach((btn) => {
+            btn.addEventListener('click', () => this.saveServingInline(parseInt(btn.dataset.servingId, 10)));
+        });
+        listEl.querySelectorAll('.delete-serving-inline-btn').forEach((btn) => {
+            btn.addEventListener('click', () => this.deleteServingInEdit(parseInt(btn.dataset.servingId, 10)));
+        });
+    },
+
+    /**
+     * Save an inline serving edit via PATCH /foods/servings/{id}
+     */
+    async saveServingInline(servingId) {
+        const labelInput = document.getElementById('inline-serving-label-input');
+        const gramsInput = document.getElementById('inline-serving-grams-input');
+        const label = labelInput ? labelInput.value.trim() : '';
+        const gramsPerUnit = gramsInput ? parseFloat(gramsInput.value) : NaN;
+
+        if (!label) {
+            alert('Please enter a label for the serving.');
+            return;
+        }
+        if (isNaN(gramsPerUnit) || gramsPerUnit <= 0) {
+            alert('Please enter how many grams one unit weighs.');
+            return;
+        }
+
+        try {
+            const updated = await api.patch(`/foods/servings/${servingId}`, { label, grams_per_unit: gramsPerUnit });
+            const serving = (this.editingFood.servings || []).find((s) => s.id === servingId);
+            if (serving) {
+                serving.label = updated.label;
+                serving.grams_per_unit = updated.grams_per_unit;
+            }
+            this.editingServingId = null;
+            this.renderEditServingsList();
+        } catch (error) {
+            console.error('Error updating serving:', error);
+            alert('Failed to update serving');
+        }
+    },
+
+    /**
+     * Delete a serving from within the edit-food form
+     */
+    async deleteServingInEdit(servingId) {
+        if (!confirm('Delete this serving?')) return;
+
+        try {
+            await api.delete(`/foods/servings/${servingId}`);
+            this.editingFood.servings = (this.editingFood.servings || []).filter((s) => s.id !== servingId);
+            if (this.editingServingId === servingId) this.editingServingId = null;
+            this.renderEditServingsList();
+        } catch (error) {
+            console.error('Error deleting serving:', error);
+            alert('Failed to delete serving');
+        }
+    },
+
+    /**
+     * Add a new serving from within the edit-food form
+     */
+    async addServingInEdit() {
+        const labelInput = document.getElementById('edit-new-serving-label-input');
+        const gramsInput = document.getElementById('edit-new-serving-grams-input');
+        const label = labelInput ? labelInput.value.trim() : '';
+        const gramsPerUnit = gramsInput ? parseFloat(gramsInput.value) : NaN;
+
+        if (!label) {
+            alert('Please enter a label for the serving.');
+            return;
+        }
+        if (isNaN(gramsPerUnit) || gramsPerUnit <= 0) {
+            alert('Please enter how many grams one unit weighs.');
+            return;
+        }
+
+        try {
+            const serving = await api.post('/foods/servings', {
+                food_id: this.editingFoodId,
+                food_source: this.editingFoodSource,
+                label,
+                grams_per_unit: gramsPerUnit,
+            });
+
+            if (!this.editingFood.servings) this.editingFood.servings = [];
+            this.editingFood.servings.push(serving);
+
+            labelInput.value = '';
+            gramsInput.value = '';
+            const form = document.getElementById('new-serving-in-edit-form');
+            if (form) form.style.display = 'none';
+
+            this.renderEditServingsList();
+        } catch (error) {
+            console.error('Error saving serving:', error);
+            alert('Failed to save serving');
+        }
     },
 
     /**
@@ -2285,15 +2783,17 @@ const foodSearch = {
     },
 
     /**
-     * Save the reviewed product via POST /foods/custom, then treat it exactly
-     * like picking a normal search result: prompt for a portion and add it
-     * to the meal being built.
+     * Save the reviewed food. When adding a brand new custom product
+     * (editingFoodId is null), POSTs and treats it like picking a normal
+     * search result - prompts for a portion and adds it to the meal being
+     * built. When editing an existing food (custom or USDA), saves in place
+     * and returns to a refreshed search instead (adjusting isn't "log it now").
      */
     async saveCustomProduct() {
         const nameInput = document.getElementById('product-name-input');
         const name = nameInput ? nameInput.value.trim() : '';
         if (!name) {
-            alert('Please enter a product name.');
+            alert('Please enter a name.');
             return;
         }
 
@@ -2312,13 +2812,84 @@ const foodSearch = {
         };
 
         try {
-            const newFood = await api.post('/foods/custom', payload);
-            const modal = document.getElementById('food-search-modal');
-            if (modal) modal.remove();
-            this.selectFood(newFood);
+            if (this.editingFoodId && this.editingFoodSource === 'usda') {
+                await api.patch(`/foods/usda/${this.editingFoodId}`, payload);
+                this.editingFoodId = null;
+                this.editingFoodSource = null;
+                alert('Food updated!');
+                this.returnToRefreshedSearch();
+            } else if (this.editingFoodId) {
+                await api.patch(`/foods/custom/${this.editingFoodId}`, payload);
+                this.editingFoodId = null;
+                this.editingFoodSource = null;
+                alert('Product updated!');
+                this.returnToRefreshedSearch();
+            } else {
+                const newFood = await api.post('/foods/custom', payload);
+                const modal = document.getElementById('food-search-modal');
+                if (modal) modal.remove();
+                this.selectFood(newFood);
+            }
         } catch (error) {
-            console.error('Error saving product:', error);
-            alert('Failed to save product');
+            console.error('Error saving food:', error);
+            alert('Failed to save changes');
+        }
+    },
+
+    /**
+     * Delete the custom product currently being edited
+     */
+    async deleteCustomProduct() {
+        if (!this.editingFoodId) return;
+        if (!confirm('Delete this product? This cannot be undone.')) return;
+
+        try {
+            await api.delete(`/foods/custom/${this.editingFoodId}`);
+            this.editingFoodId = null;
+            this.editingFoodSource = null;
+            alert('Product deleted.');
+            this.returnToRefreshedSearch();
+        } catch (error) {
+            console.error('Error deleting product:', error);
+            alert('Failed to delete product');
+        }
+    },
+
+    /**
+     * Discard a correction on the USDA food currently being edited, reverting
+     * it back to the original imported name/macros
+     */
+    async revertUsdaFood() {
+        if (!this.editingFoodId) return;
+        if (!confirm('Revert to the original USDA values for this food?')) return;
+
+        try {
+            await api.delete(`/foods/usda/${this.editingFoodId}/override`);
+            this.editingFoodId = null;
+            this.editingFoodSource = null;
+            alert('Reverted to the original USDA values.');
+            this.returnToRefreshedSearch();
+        } catch (error) {
+            // A 404 just means there was no correction to revert (already original)
+            console.error('Error reverting food:', error);
+            this.editingFoodId = null;
+            this.editingFoodSource = null;
+            this.returnToRefreshedSearch();
+        }
+    },
+
+    /**
+     * After editing/deleting a product, go back to the search results view
+     * and re-run the current query so the list reflects the change
+     */
+    returnToRefreshedSearch() {
+        this.showSearchView();
+        const searchInput = document.querySelector('#food-search-modal input[type="text"]');
+        if (searchInput && searchInput.value.trim()) {
+            this.runSearch(searchInput.value);
+        } else {
+            const list = document.getElementById('food-search-results');
+            if (list) list.innerHTML = '<p style="color: #888; text-align: center; padding: 1rem;">Start typing to search</p>';
         }
     },
 
@@ -2338,13 +2909,17 @@ const foodSearch = {
     /**
      * Handle editing an item's grams: update the model and refresh just that
      * item's macro text plus the running total (not a full re-render, so the
-     * grams input keeps focus while typing)
+     * grams input keeps focus while typing). Editing grams directly clears
+     * any serving reference, since "3 rice cakes" would otherwise go stale
+     * the moment the underlying grams no longer match count x grams_per_unit.
      */
     updateItemGrams(index, value) {
         const grams = parseFloat(value);
         if (isNaN(grams) || grams <= 0) return;
 
         this.items[index].grams = grams;
+        this.items[index].servingLabel = null;
+        this.items[index].servingCount = null;
 
         const macros = this.computeMacros(this.items[index]);
         const macrosEl = document.querySelector(`.item-macros[data-index="${index}"]`);
@@ -2352,7 +2927,29 @@ const foodSearch = {
             macrosEl.textContent = `${Math.round(macros.calories)} kcal · ${macros.protein_g.toFixed(1)}g P · ${macros.carbs_g.toFixed(1)}g C · ${macros.fat_g.toFixed(1)}g F`;
         }
 
+        const servingEl = document.querySelector(`.item-serving[data-index="${index}"]`);
+        if (servingEl) servingEl.textContent = '';
+
         this.updateTotal();
+    },
+
+    /**
+     * Format a serving count for display: whole numbers with no decimal,
+     * otherwise one decimal place
+     */
+    formatServingCount(count) {
+        return Number.isInteger(count) ? String(count) : String(Math.round(count * 10) / 10);
+    },
+
+    /**
+     * "3 rice cakes" for an item logged via a serving, or null if it was
+     * logged (or has since been edited) in plain grams
+     */
+    formatServingText(item) {
+        if (!item.servingLabel || item.servingCount == null) return null;
+        const countText = this.formatServingCount(item.servingCount);
+        const plural = item.servingCount === 1 ? '' : 's';
+        return `${countText} ${item.servingLabel}${plural}`;
     },
 
     /**
@@ -2382,10 +2979,12 @@ const foodSearch = {
 
         itemsEl.innerHTML = this.items.map((item, index) => {
             const macros = this.computeMacros(item);
+            const servingText = this.formatServingText(item);
             return `
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0;">
                 <div style="flex: 1;">
                     <div style="font-weight: bold;">${this.escapeHtml(item.name)}</div>
+                    <div class="item-serving" data-index="${index}" style="font-size: 0.75rem; color: #e94560; margin-top: 0.1rem;">${servingText ? this.escapeHtml(servingText) : ''}</div>
                     <div style="display: flex; align-items: center; gap: 0.4rem; margin-top: 0.25rem;">
                         <input type="number" min="1" step="1" value="${item.grams}" data-index="${index}" class="item-grams-input"
                             style="width: 64px; padding: 0.3rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.85rem;">
@@ -2460,6 +3059,8 @@ const foodSearch = {
                     protein_g: macros.protein_g,
                     carbs_g: macros.carbs_g,
                     fat_g: macros.fat_g,
+                    serving_label: item.servingLabel || null,
+                    serving_count: item.servingCount != null ? item.servingCount : null,
                 };
             }),
         };
@@ -2635,15 +3236,19 @@ const foodSearch = {
             // Build food item rows
             let itemsHtml = '';
             if (meal.items && meal.items.length > 0) {
-                itemsHtml = meal.items.map((item, idx) => `
+                itemsHtml = meal.items.map((item, idx) => {
+                    const amountText = item.serving_label && item.serving_count != null
+                        ? `${this.formatServingCount(item.serving_count)} ${item.serving_label}${item.serving_count === 1 ? '' : 's'}`
+                        : `${item.grams} g`;
+                    return `
                     <div class="meal-history-detail-food">
                         <div class="meal-history-detail-food-name">${this.escapeHtml(item.name)}</div>
-                        <div class="meal-history-detail-food-grams">${item.grams} g</div>
+                        <div class="meal-history-detail-food-grams">${this.escapeHtml(amountText)}</div>
                         <div class="meal-history-detail-food-macros">
                             ${Math.round(item.calories)} kcal · ${item.protein_g.toFixed(1)}g P · ${item.carbs_g.toFixed(1)}g C · ${item.fat_g.toFixed(1)}g F
                         </div>
-                    </div>
-                `).join('');
+                    </div>`;
+                }).join('');
             } else {
                 itemsHtml = '<p style="color: #999;">No food items in this meal.</p>';
             }
@@ -2719,6 +3324,8 @@ const foodSearch = {
                         carbs_g: (item.carbs_g || 0) / scale,
                         fat_g: (item.fat_g || 0) / scale,
                     },
+                    servingLabel: item.serving_label || null,
+                    servingCount: item.serving_count != null ? item.serving_count : null,
                 };
             });
 
@@ -2783,6 +3390,8 @@ const foodSearch = {
                         carbs_g: (item.carbs_g || 0) / scale,
                         fat_g: (item.fat_g || 0) / scale,
                     },
+                    servingLabel: item.serving_label || null,
+                    servingCount: item.serving_count != null ? item.serving_count : null,
                 };
             });
 

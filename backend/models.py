@@ -14,6 +14,8 @@ This module defines all database models:
 - DailyEvaluation: Daily habit and mood evaluation
 - Food: USDA FoodData Central food reference (per-100g macros)
 - UserFood: User-added food reference (e.g. scanned from a nutrition label)
+- FoodServing: A custom serving size for a food (e.g. "1 rice cake = 9g")
+- FoodOverride: A user-edited correction to a USDA food's name/macros
 """
 
 from datetime import date, datetime
@@ -57,6 +59,45 @@ class UserFood(SQLModel, table=True):
     carbs_g: float = Field(..., description="Carbohydrate in grams per 100g")
     fat_g: float = Field(..., description="Total fat in grams per 100g")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
+
+
+class FoodServing(SQLModel, table=True):
+    """
+    Model for a custom serving size defined for a food (e.g. "1 rice cake =
+    9g"), so amounts can be logged as a count of servings instead of grams.
+
+    food_id/food_source together identify the food, since it may live in
+    either the Food (USDA) or UserFood (custom) table - there's no single
+    table to put a plain foreign key on.
+    """
+    __tablename__ = "food_servings"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    food_id: int = Field(..., index=True, description="id of the food in its source table")
+    food_source: str = Field(..., description="'usda' (Food table) or 'custom' (UserFood table)")
+    label: str = Field(..., description="Serving name, e.g. 'rice cake', 'slice', 'cup'")
+    grams_per_unit: float = Field(..., description="Grams in one unit of this serving")
+
+
+class FoodOverride(SQLModel, table=True):
+    """
+    A user-edited correction to a USDA food's name/macros.
+
+    The Food table is wiped and reloaded every time import_usda.py runs, so
+    edits can't live there - they'd vanish on the next re-import. This table
+    is never touched by that script, so an override survives it; search
+    results apply it on top of the base Food row when one exists.
+    """
+    __tablename__ = "food_overrides"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    food_id: int = Field(..., index=True, unique=True, description="id of the Food row being corrected")
+    food_source: str = Field(default="usda", description="Always 'usda' today - kept for symmetry with FoodServing")
+    description: str = Field(..., description="Corrected food name")
+    calories_kcal: float = Field(..., description="Corrected energy in kcal per 100g")
+    protein_g: float = Field(..., description="Corrected protein in grams per 100g")
+    carbs_g: float = Field(..., description="Corrected carbohydrate in grams per 100g")
+    fat_g: float = Field(..., description="Corrected total fat in grams per 100g")
 
 
 class Workout(SQLModel, table=True):
@@ -158,6 +199,8 @@ class FoodItem(SQLModel, table=True):
     barcode: Optional[str] = Field(default=None, description="Barcode if scanned from product")
     source: Optional[str] = Field(default=None, description="Where this item came from: 'search', 'photo', or 'barcode'")
     fdc_id: Optional[int] = Field(default=None, description="USDA FoodData Central ID, for source='search' or 'photo'")
+    serving_label: Optional[str] = Field(default=None, description="Serving name used to log this amount, e.g. 'rice cake' (null if logged in grams directly)")
+    serving_count: Optional[float] = Field(default=None, description="How many of the serving were logged, e.g. 3 (pairs with serving_label)")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
 
 
