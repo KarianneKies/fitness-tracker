@@ -239,9 +239,10 @@ function initTabs() {
                 }
             }
 
-            // Load saved meals for Food tab
+            // Load saved meals and meal templates for Food tab
             if (tabId === 'food' && typeof foodSearch !== 'undefined') {
                 foodSearch.loadSavedMeals();
+                foodSearch.loadMealTemplates();
             }
 
             // Load check-ins for Check-in tab
@@ -252,6 +253,11 @@ function initTabs() {
             // Refresh Today's Overview when returning to it
             if (tabId === 'today' && typeof today !== 'undefined') {
                 today.loadToday();
+            }
+
+            // Refresh charts for the Progress tab
+            if (tabId === 'progress' && typeof progress !== 'undefined') {
+                progress.load();
             }
         });
     });
@@ -627,6 +633,8 @@ async function saveExerciseToBackend(exercise, keepSets = false) {
         container.innerHTML = exercisesData.map((exercise, exIndex) => {
             // Create a unique identifier for the tbody to avoid ID conflicts when exercises are added/replaced
             const tbodyId = `sets-${exIndex}`;
+            const canMoveUp = exIndex > 0;
+            const canMoveDown = exIndex < exercisesData.length - 1;
             return `
         <div class="card" data-exercise-id="${exercise.id || 'temp'}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}" data-internal-index="${exIndex}">
             <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -634,7 +642,14 @@ async function saveExerciseToBackend(exercise, keepSets = false) {
                     <strong>${exercise.name}</strong>
                     ${!exercise.id ? '<span style="font-size: 0.8rem; color: #888;">(unsaved)</span>' : ''}
                 </div>
-                ${isLocked ? '' : `<button onclick="removeExercise(${exIndex})" title="Remove exercise" style="background: none; border: none; cursor: pointer; padding: 0.25rem; color: #dc3545; font-size: 1.1rem;">🗑️</button>`}
+                ${isLocked ? '' : `
+                    <div style="display: flex; gap: 0.1rem;">
+                        <button onclick="moveExercise(${exIndex}, -1)" title="Move up" ${canMoveUp ? '' : 'disabled'} style="background: none; border: none; cursor: ${canMoveUp ? 'pointer' : 'default'}; padding: 0.25rem; font-size: 1rem; opacity: ${canMoveUp ? '1' : '0.3'};">▲</button>
+                        <button onclick="moveExercise(${exIndex}, 1)" title="Move down" ${canMoveDown ? '' : 'disabled'} style="background: none; border: none; cursor: ${canMoveDown ? 'pointer' : 'default'}; padding: 0.25rem; font-size: 1rem; opacity: ${canMoveDown ? '1' : '0.3'};">▼</button>
+                        <button onclick="replaceExercise(${exIndex})" title="Replace exercise" style="background: none; border: none; cursor: pointer; padding: 0.25rem; font-size: 1rem;">🔄</button>
+                        <button onclick="removeExercise(${exIndex})" title="Remove exercise" style="background: none; border: none; cursor: pointer; padding: 0.25rem; color: #dc3545; font-size: 1rem;">🗑️</button>
+                    </div>
+                `}
             </div>
             
             <table class="set-table" style="width: 100%; border-collapse: collapse; margin-top: 0.75rem; font-size: 0.85rem;">
@@ -934,6 +949,51 @@ window.removeExercise = async function(exerciseIndex) {
     renderExercises();
 };
 
+// Move an exercise up (direction -1) or down (direction 1) in the active workout
+window.moveExercise = async function(exerciseIndex, direction) {
+    const newIndex = exerciseIndex + direction;
+    if (newIndex < 0 || newIndex >= exercisesData.length) return;
+
+    // Swap in local state
+    const temp = exercisesData[exerciseIndex];
+    exercisesData[exerciseIndex] = exercisesData[newIndex];
+    exercisesData[newIndex] = temp;
+
+    // Reassign sequential order values to match the new array positions
+    exercisesData.forEach((ex, i) => { ex.order = i + 1; });
+
+    renderExercises();
+
+    // Persist the new order for exercises already saved to the backend
+    if (!activeWorkout || !activeWorkout.id) return;
+
+    const exercisesPayload = exercisesData
+        .filter((ex) => ex.id)
+        .map((ex) => ({
+            id: ex.id,
+            name: ex.name,
+            order: ex.order,
+            sets: (ex.sets || []).map((set) => ({
+                id: set.id,
+                order: set.order,
+                reps: set.reps,
+                weight_kg: set.weight_kg,
+                hold_seconds: set.hold_seconds,
+                to_failure: set.to_failure,
+                rest_seconds: set.rest_seconds,
+                note: set.note
+            }))
+        }));
+
+    if (exercisesPayload.length === 0) return;
+
+    try {
+        await api.patch(`/workouts/${activeWorkout.id}`, { exercises: exercisesPayload });
+    } catch (error) {
+        console.error('Error saving exercise order:', error);
+    }
+};
+
 // Replace exercise in workout
 window.replaceExercise = function(exerciseIndex) {
     showExercisePicker();
@@ -1045,6 +1105,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize Today's Overview (default active tab, so load right away)
     if (typeof today !== 'undefined' && today.init) {
         today.init();
+    }
+
+    // Initialize the Progress tab (charts load lazily on tab switch)
+    if (typeof progress !== 'undefined' && progress.init) {
+        progress.init();
     }
 
     // Start new workout button
@@ -1984,6 +2049,12 @@ const foodSearch = {
     /** Debounce timer for the search input */
     searchDebounce: null,
 
+    /** Cached list of saved meal templates, from the last loadMealTemplates() call */
+    templates: [],
+
+    /** {id, name} while editing an existing template's items in the builder, else null */
+    activeTemplateEdit: null,
+
     /**
      * Wire up the "Add meal" entry point, the food search button, and the
      * meal-in-progress save/cancel buttons. Also loads the saved meals list.
@@ -1992,6 +2063,11 @@ const foodSearch = {
         const addMealBtn = document.getElementById('add-meal-btn');
         if (addMealBtn) {
             addMealBtn.addEventListener('click', () => this.openMealBuilder());
+        }
+
+        const addFromTemplateBtn = document.getElementById('add-from-template-btn');
+        if (addFromTemplateBtn) {
+            addFromTemplateBtn.addEventListener('click', () => this.showTemplatePickerModal());
         }
 
         const addFoodBtn = document.getElementById('add-food-btn');
@@ -2009,7 +2085,42 @@ const foodSearch = {
             clearBtn.addEventListener('click', () => this.closeMealBuilder());
         }
 
+        const saveTemplateBtn = document.getElementById('save-as-template-btn');
+        if (saveTemplateBtn) {
+            saveTemplateBtn.addEventListener('click', () => this.saveAsTemplate());
+        }
+
+        // Quick-pick buttons fill the name field but leave it editable,
+        // so "Lunch" can still be typed further into "Lunch - Salad Bar (work)"
+        document.querySelectorAll('.meal-quick-name-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const nameInput = document.getElementById('meal-name-input');
+                if (nameInput) nameInput.value = btn.dataset.name;
+            });
+        });
+
         this.loadSavedMeals();
+        this.loadMealTemplates();
+    },
+
+    /**
+     * Toggle the builder between logging a dated meal ('meal') and editing a
+     * template's items directly ('template-edit', no date, single save action).
+     */
+    setBuilderMode(mode) {
+        const dateRow = document.getElementById('meal-date-row');
+        const saveBtn = document.getElementById('save-search-meal-btn');
+        const saveTemplateBtn = document.getElementById('save-as-template-btn');
+
+        if (mode === 'template-edit') {
+            if (dateRow) dateRow.style.display = 'none';
+            if (saveBtn) saveBtn.style.display = 'none';
+            if (saveTemplateBtn) saveTemplateBtn.textContent = '💾 Update Template';
+        } else {
+            if (dateRow) dateRow.style.display = '';
+            if (saveBtn) saveBtn.style.display = 'block';
+            if (saveTemplateBtn) saveTemplateBtn.textContent = '💾 Save as Template';
+        }
     },
 
     /**
@@ -2018,6 +2129,7 @@ const foodSearch = {
      */
     openMealBuilder() {
         activeMeal = null;
+        this.activeTemplateEdit = null;
         this.items = [];
 
         const addMealCard = document.getElementById('add-meal-card');
@@ -2039,9 +2151,10 @@ const foodSearch = {
             dateInput.value = localDate.toISOString().slice(0, 10);
         }
 
-        const typeSelect = document.getElementById('meal-type-select');
-        if (typeSelect) typeSelect.value = '';
+        const nameInput = document.getElementById('meal-name-input');
+        if (nameInput) nameInput.value = '';
 
+        this.setBuilderMode('meal');
         this.renderMeal();
     },
 
@@ -2050,6 +2163,7 @@ const foodSearch = {
      */
     closeMealBuilder() {
         activeMeal = null;
+        this.activeTemplateEdit = null;
         this.items = [];
 
         const section = document.getElementById('search-meal-section');
@@ -3167,11 +3281,11 @@ const foodSearch = {
             return;
         }
 
-        const typeSelect = document.getElementById('meal-type-select');
+        const nameInput = document.getElementById('meal-name-input');
         const dateInput = document.getElementById('meal-date-input');
 
         const payload = {
-            name: typeSelect ? (typeSelect.value || undefined) : undefined,
+            name: nameInput ? (nameInput.value.trim() || undefined) : undefined,
             meal_date: dateInput ? (dateInput.value || undefined) : undefined,
             items: this.items.map((item) => {
                 const macros = this.computeMacros(item);
@@ -3267,6 +3381,281 @@ const foodSearch = {
                 </div>
             `).join('')}
         `).join('');
+    },
+
+    /**
+     * Load saved meal templates from GET /meal-templates. Always caches the
+     * list (so it's ready the moment the picker modal opens); only renders
+     * into the modal's list if the modal happens to be open already.
+     */
+    async loadMealTemplates() {
+        try {
+            this.templates = await api.get('/meal-templates');
+            if (document.getElementById('template-picker-list')) {
+                this.renderMealTemplates(this.templates);
+            }
+        } catch (error) {
+            console.error('Error loading meal templates:', error);
+        }
+    },
+
+    /**
+     * Open the meal-template picker modal. Templates live entirely behind
+     * this button/modal so they never take up space on the Food tab itself -
+     * today's meals stay the first thing visible.
+     */
+    showTemplatePickerModal() {
+        let modal = document.getElementById('template-picker-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'template-picker-modal';
+            modal.style.cssText = `
+                position: fixed;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0, 0, 0, 0.5);
+                z-index: 1000;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            `;
+            modal.innerHTML = `
+                <div style="background: white; border-radius: 12px; width: 90%; max-width: 400px; max-height: 80vh; display: flex; flex-direction: column; overflow: hidden;">
+                    <div style="padding: 1rem; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
+                        <h3 style="margin: 0;">Meal Templates</h3>
+                        <button id="template-picker-close-btn" style="background: none; border: none; font-size: 1.3rem; cursor: pointer; color: #666; line-height: 1;">&times;</button>
+                    </div>
+                    <div id="template-picker-list" style="padding: 0.75rem; overflow-y: auto; flex: 1;"></div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            document.getElementById('template-picker-close-btn').addEventListener('click', () => this.hideTemplatePickerModal());
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) this.hideTemplatePickerModal();
+            });
+        } else {
+            modal.style.display = 'flex';
+        }
+
+        this.renderMealTemplates(this.templates);
+    },
+
+    hideTemplatePickerModal() {
+        const modal = document.getElementById('template-picker-modal');
+        if (modal) modal.style.display = 'none';
+    },
+
+    /**
+     * Render the saved meal templates list into the picker modal
+     */
+    renderMealTemplates(templates) {
+        const listEl = document.getElementById('template-picker-list');
+        if (!listEl) return;
+
+        if (!templates || templates.length === 0) {
+            listEl.className = 'empty-state';
+            listEl.innerHTML = 'No saved templates yet. Build a meal, then tap "Save as Template" to reuse it later.';
+            return;
+        }
+
+        listEl.className = '';
+
+        listEl.innerHTML = templates.map((template) => `
+            <div class="history-card">
+                <div class="history-card-header">
+                    <span class="history-card-name">${this.escapeHtml(template.name)}</span>
+                    <span>
+                        <button class="history-menu-btn" onclick="foodSearch.editMealTemplate(${template.id})">✏️</button>
+                        <button class="history-menu-btn" onclick="foodSearch.deleteMealTemplate(${template.id})">🗑️</button>
+                    </span>
+                </div>
+                <div style="font-size: 0.85rem; color: #666; margin-bottom: 0.5rem;">
+                    ${template.items.map((item) => this.escapeHtml(item.name)).join(', ')}
+                </div>
+                <div style="font-size: 0.85rem; font-weight: bold; margin-bottom: 0.5rem;">
+                    ${Math.round(template.total_calories)} kcal · ${template.total_protein_g.toFixed(1)}g P · ${template.total_carbs_g.toFixed(1)}g C · ${template.total_fat_g.toFixed(1)}g F
+                </div>
+                <button class="btn" style="font-size: 0.85rem; padding: 0.5rem;" onclick="foodSearch.useMealTemplate(${template.id})">+ Log Today</button>
+            </div>
+        `).join('');
+    },
+
+    /**
+     * Save the meal currently being built as a reusable template, so it can
+     * be logged again later without re-searching for each item. Does not
+     * itself log a meal for today - "Save Meal" does that separately.
+     *
+     * If activeTemplateEdit is set (opened via "Edit" on an existing
+     * template), this updates that template in place instead of creating a
+     * new one.
+     */
+    async saveAsTemplate() {
+        if (this.items.length === 0) {
+            alert('Add at least one food first.');
+            return;
+        }
+
+        const nameInput = document.getElementById('meal-name-input');
+        const defaultName = this.activeTemplateEdit
+            ? this.activeTemplateEdit.name
+            : (nameInput ? nameInput.value.trim() : '');
+        const name = prompt('Name this template:', defaultName);
+        if (!name || !name.trim()) return;
+
+        const payload = {
+            name: name.trim(),
+            items: this.items.map((item) => {
+                const macros = this.computeMacros(item);
+                return {
+                    fdc_id: item.fdc_id,
+                    name: item.name,
+                    grams: item.grams,
+                    calories: macros.calories,
+                    protein_g: macros.protein_g,
+                    carbs_g: macros.carbs_g,
+                    fat_g: macros.fat_g,
+                    serving_label: item.servingLabel || null,
+                    serving_count: item.servingCount != null ? item.servingCount : null,
+                };
+            }),
+        };
+
+        try {
+            if (this.activeTemplateEdit) {
+                await api.patch(`/meal-templates/${this.activeTemplateEdit.id}`, payload);
+                alert('Template updated!');
+                this.closeMealBuilder();
+            } else {
+                await api.post('/meal-templates', payload);
+                alert('Template saved!');
+            }
+            this.loadMealTemplates();
+        } catch (error) {
+            console.error('Error saving template:', error);
+            alert('Failed to save template');
+        }
+    },
+
+    /**
+     * Open the meal builder pre-filled with a saved template's items, dated
+     * today, for review before saving - mirrors copyMealToToday(). The
+     * template itself is untouched and stays available for reuse.
+     */
+    useMealTemplate(templateId) {
+        const template = this.templates.find((t) => t.id === templateId);
+        if (!template) return;
+
+        this.hideTemplatePickerModal();
+
+        activeMeal = null;
+        this.activeTemplateEdit = null;
+
+        this.items = template.items.map((item) => {
+            const scale = item.grams > 0 ? item.grams / 100 : 1;
+            return {
+                fdc_id: item.fdc_id,
+                name: item.name,
+                grams: item.grams,
+                per100: {
+                    calories: (item.calories || 0) / scale,
+                    protein_g: (item.protein_g || 0) / scale,
+                    carbs_g: (item.carbs_g || 0) / scale,
+                    fat_g: (item.fat_g || 0) / scale,
+                },
+                servingLabel: item.serving_label || null,
+                servingCount: item.serving_count != null ? item.serving_count : null,
+            };
+        });
+
+        const addMealCard = document.getElementById('add-meal-card');
+        if (addMealCard) addMealCard.style.display = 'none';
+
+        const section = document.getElementById('search-meal-section');
+        if (section) section.style.display = 'block';
+
+        const titleEl = document.getElementById('meal-builder-title');
+        if (titleEl) titleEl.textContent = 'New Meal';
+
+        const saveBtn = document.getElementById('save-search-meal-btn');
+        if (saveBtn) saveBtn.textContent = 'Save Meal';
+
+        const dateInput = document.getElementById('meal-date-input');
+        if (dateInput) {
+            const today = new Date();
+            const localDate = new Date(today.getTime() - today.getTimezoneOffset() * 60000);
+            dateInput.value = localDate.toISOString().slice(0, 10);
+        }
+
+        const nameInput = document.getElementById('meal-name-input');
+        if (nameInput) nameInput.value = template.name;
+
+        this.setBuilderMode('meal');
+        this.renderMeal();
+
+        section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+
+    /**
+     * Open the meal builder to edit a template's own name/items in place
+     * (not a dated log - "Update Template" saves back to the same template).
+     */
+    editMealTemplate(templateId) {
+        const template = this.templates.find((t) => t.id === templateId);
+        if (!template) return;
+
+        this.hideTemplatePickerModal();
+
+        activeMeal = null;
+        this.activeTemplateEdit = { id: template.id, name: template.name };
+
+        this.items = template.items.map((item) => {
+            const scale = item.grams > 0 ? item.grams / 100 : 1;
+            return {
+                fdc_id: item.fdc_id,
+                name: item.name,
+                grams: item.grams,
+                per100: {
+                    calories: (item.calories || 0) / scale,
+                    protein_g: (item.protein_g || 0) / scale,
+                    carbs_g: (item.carbs_g || 0) / scale,
+                    fat_g: (item.fat_g || 0) / scale,
+                },
+                servingLabel: item.serving_label || null,
+                servingCount: item.serving_count != null ? item.serving_count : null,
+            };
+        });
+
+        const addMealCard = document.getElementById('add-meal-card');
+        if (addMealCard) addMealCard.style.display = 'none';
+
+        const section = document.getElementById('search-meal-section');
+        if (section) section.style.display = 'block';
+
+        const titleEl = document.getElementById('meal-builder-title');
+        if (titleEl) titleEl.textContent = 'Edit Template';
+
+        const nameInput = document.getElementById('meal-name-input');
+        if (nameInput) nameInput.value = template.name;
+
+        this.setBuilderMode('template-edit');
+        this.renderMeal();
+
+        section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+
+    /**
+     * Delete a saved meal template
+     */
+    async deleteMealTemplate(templateId) {
+        if (!confirm('Delete this template?')) return;
+
+        try {
+            await api.delete(`/meal-templates/${templateId}`);
+            this.loadMealTemplates();
+        } catch (error) {
+            console.error('Error deleting template:', error);
+            alert('Failed to delete template');
+        }
     },
 
     /**
@@ -3447,6 +3836,7 @@ const foodSearch = {
             const meal = await api.get(`/meals/${mealId}`);
 
             activeMeal = { id: meal.id, isPastEdit: true };
+            this.activeTemplateEdit = null;
 
             // Copy items into foodSearch.items for editing. The API only
             // returns each item's final (grams-scaled) macros, so back out
@@ -3488,17 +3878,11 @@ const foodSearch = {
             const dateInput = document.getElementById('meal-date-input');
             if (dateInput) dateInput.value = meal.meal_date;
 
-            // Set meal type select
-            const typeSelect = document.getElementById('meal-type-select');
-            if (typeSelect) {
-                const normalizedMealName = meal.name ? meal.name.toLowerCase() : '';
-                if (normalizedMealName.includes('breakfast')) typeSelect.value = 'Breakfast';
-                else if (normalizedMealName.includes('lunch')) typeSelect.value = 'Lunch';
-                else if (normalizedMealName.includes('dinner')) typeSelect.value = 'Dinner';
-                else if (normalizedMealName.includes('snack')) typeSelect.value = 'Snack';
-                else typeSelect.value = '';
-            }
+            // Set the meal name field to the meal's existing name, verbatim
+            const nameInput = document.getElementById('meal-name-input');
+            if (nameInput) nameInput.value = meal.name || '';
 
+            this.setBuilderMode('meal');
             this.renderMeal();
 
         } catch (error) {
@@ -3518,6 +3902,7 @@ const foodSearch = {
             const meal = await api.get(`/meals/${mealId}`);
 
             activeMeal = null;
+            this.activeTemplateEdit = null;
 
             this.items = meal.items.map((item) => {
                 const scale = item.grams > 0 ? item.grams / 100 : 1;
@@ -3556,17 +3941,11 @@ const foodSearch = {
                 dateInput.value = localDate.toISOString().slice(0, 10);
             }
 
-            // Carry over the meal type (Breakfast/Lunch/etc.) from the original
-            const typeSelect = document.getElementById('meal-type-select');
-            if (typeSelect) {
-                const normalizedMealName = meal.name ? meal.name.toLowerCase() : '';
-                if (normalizedMealName.includes('breakfast')) typeSelect.value = 'Breakfast';
-                else if (normalizedMealName.includes('lunch')) typeSelect.value = 'Lunch';
-                else if (normalizedMealName.includes('dinner')) typeSelect.value = 'Dinner';
-                else if (normalizedMealName.includes('snack')) typeSelect.value = 'Snack';
-                else typeSelect.value = '';
-            }
+            // Carry over the meal name from the original, verbatim
+            const nameInput = document.getElementById('meal-name-input');
+            if (nameInput) nameInput.value = meal.name || '';
 
+            this.setBuilderMode('meal');
             this.renderMeal();
 
             section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -4215,6 +4594,216 @@ const today = {
 };
 
 window.today = today;
+
+// Format a date-only string (YYYY-MM-DD) for compact chart labels, e.g. "Aug 5".
+// Parsed as local calendar components (same reasoning as foodSearch.formatDate).
+function formatShortDate(dateStr) {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+// Hand-rolled inline SVG line chart, shared by the Progress tab's weight,
+// calories, and strength charts. points: [{date, value}], sorted ascending.
+// options.referenceValue draws a dashed goal/target line.
+function progressLineChartSvg(points, options = {}) {
+    const { unit = '', referenceValue = null, referenceLabel = '', color = '#e94560' } = options;
+    const width = 600;
+    const height = 200;
+    const padX = 40;
+    const padY = 30;
+
+    const values = points.map((p) => p.value);
+    let min = Math.min(...values);
+    let max = Math.max(...values);
+    if (referenceValue != null) {
+        min = Math.min(min, referenceValue);
+        max = Math.max(max, referenceValue);
+    }
+    if (min === max) {
+        min -= 1;
+        max += 1;
+    }
+    const range = max - min;
+
+    const x = (i) => (points.length > 1 ? padX + (i / (points.length - 1)) * (width - padX * 2) : width / 2);
+    const y = (v) => height - padY - ((v - min) / range) * (height - padY * 2);
+
+    const linePoints = points.map((p, i) => `${x(i)},${y(p.value)}`).join(' ');
+    const dots = points.map((p, i) => `<circle cx="${x(i)}" cy="${y(p.value)}" r="4" fill="${color}"/>`).join('');
+
+    const firstLabel = `<text x="${x(0)}" y="${y(points[0].value) - 12}" fill="#888" font-size="12" text-anchor="middle">${points[0].value}${unit}</text>`;
+    const lastLabel = points.length > 1
+        ? `<text x="${x(points.length - 1)}" y="${y(points[points.length - 1].value) - 12}" fill="#1a1a2e" font-size="12" font-weight="600" text-anchor="middle">${points[points.length - 1].value}${unit}</text>`
+        : '';
+
+    const referenceLine = referenceValue != null
+        ? `<line x1="${padX}" y1="${y(referenceValue)}" x2="${width - padX}" y2="${y(referenceValue)}" stroke="#999" stroke-width="1" stroke-dasharray="4,4"/>
+           <text x="${width - padX}" y="${y(referenceValue) - 6}" fill="#999" font-size="11" text-anchor="end">${referenceLabel} ${referenceValue}${unit}</text>`
+        : '';
+
+    const dateLabels = `
+        <text x="${padX}" y="${height - 6}" fill="#888" font-size="11" text-anchor="start">${formatShortDate(points[0].date)}</text>
+        ${points.length > 1 ? `<text x="${width - padX}" y="${height - 6}" fill="#888" font-size="11" text-anchor="end">${formatShortDate(points[points.length - 1].date)}</text>` : ''}
+    `;
+
+    return `
+        <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" xmlns="http://www.w3.org/2000/svg">
+            ${referenceLine}
+            <polyline points="${linePoints}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+            ${dots}
+            ${firstLabel}
+            ${lastLabel}
+            ${dateLabels}
+        </svg>
+    `;
+}
+
+const progress = {
+    init() {
+        const exerciseSelect = document.getElementById('progress-exercise-select');
+        if (exerciseSelect) {
+            exerciseSelect.addEventListener('change', () => {
+                this.loadStrengthChart(exerciseSelect.value);
+            });
+        }
+    },
+
+    /**
+     * Load/refresh all three Progress tab charts. Called on tab switch.
+     */
+    load() {
+        this.loadWeightChart();
+        this.loadCaloriesChart();
+        this.populateExerciseSelect();
+    },
+
+    async loadWeightChart() {
+        const container = document.getElementById('progress-weight-chart');
+        if (!container) return;
+
+        try {
+            const [checkins, goal] = await Promise.all([
+                api.get('/checkins'),
+                api.get('/goal').catch(() => null),
+            ]);
+
+            const points = checkins
+                .filter((c) => c.weight_kg != null)
+                .map((c) => ({ date: c.checkin_date, value: c.weight_kg }))
+                .sort((a, b) => a.date.localeCompare(b.date));
+
+            if (points.length === 0) {
+                container.className = 'empty-state';
+                container.innerHTML = 'Not enough check-in data yet.';
+                return;
+            }
+
+            container.className = '';
+            container.innerHTML = progressLineChartSvg(points, {
+                unit: ' kg',
+                referenceValue: goal && goal.target_weight_kg != null ? goal.target_weight_kg : null,
+                referenceLabel: 'Goal',
+            });
+        } catch (error) {
+            console.error('Error loading weight chart:', error);
+        }
+    },
+
+    async loadCaloriesChart() {
+        const container = document.getElementById('progress-calories-chart');
+        if (!container) return;
+
+        try {
+            const [meals, goal] = await Promise.all([
+                api.get('/meals'),
+                api.get('/goal').catch(() => null),
+            ]);
+
+            const byDate = {};
+            meals.forEach((m) => {
+                byDate[m.meal_date] = (byDate[m.meal_date] || 0) + m.total_calories;
+            });
+
+            const points = Object.keys(byDate)
+                .sort()
+                .slice(-30)
+                .map((date) => ({ date, value: Math.round(byDate[date]) }));
+
+            if (points.length === 0) {
+                container.className = 'empty-state';
+                container.innerHTML = 'Not enough meal data yet.';
+                return;
+            }
+
+            container.className = '';
+            container.innerHTML = progressLineChartSvg(points, {
+                unit: ' kcal',
+                referenceValue: goal && goal.calorie_target != null ? goal.calorie_target : null,
+                referenceLabel: 'Target',
+            });
+        } catch (error) {
+            console.error('Error loading calories chart:', error);
+        }
+    },
+
+    /**
+     * Fill the exercise dropdown with only exercises actually logged in a
+     * workout (not the full pickable list, which includes things never
+     * done), merged by base name (e.g. "Romanian Deadlift" and "Romanian
+     * Deadlift (Barbell)" count as one) and sorted by how many times each
+     * has been logged, most-frequent first.
+     */
+    async populateExerciseSelect() {
+        const select = document.getElementById('progress-exercise-select');
+        if (!select) return;
+
+        try {
+            const logged = await api.get('/exercises/logged');
+            const current = select.value;
+            select.innerHTML = '<option value="">Select an exercise…</option>' +
+                logged.map((g) => `<option value="${this.escapeHtml(g.name)}">${this.escapeHtml(g.name)} (${g.count}×)</option>`).join('');
+            if (current) select.value = current;
+        } catch (error) {
+            console.error('Error loading logged exercises:', error);
+        }
+    },
+
+    async loadStrengthChart(exerciseName) {
+        const container = document.getElementById('progress-strength-chart');
+        if (!container) return;
+
+        if (!exerciseName) {
+            container.className = 'empty-state';
+            container.innerHTML = 'Pick an exercise to see its progression.';
+            return;
+        }
+
+        try {
+            const data = await api.get(`/exercises/progress?name=${encodeURIComponent(exerciseName)}`);
+            const points = data.map((p) => ({ date: p.date, value: p.weight_kg }));
+
+            if (points.length === 0) {
+                container.className = 'empty-state';
+                container.innerHTML = `No weighted sets logged yet for ${this.escapeHtml(exerciseName)}.`;
+                return;
+            }
+
+            container.className = '';
+            container.innerHTML = progressLineChartSvg(points, { unit: ' kg' });
+        } catch (error) {
+            console.error('Error loading strength chart:', error);
+        }
+    },
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    },
+};
+
+window.progress = progress;
 
 
 

@@ -10,6 +10,8 @@ This module defines all database models:
 - ExerciseSet: A single set of an exercise with reps, weight, rest
 - Meal: Meal records containing multiple food items
 - FoodItem: Individual food entries with nutrition data
+- MealTemplate: A reusable named combination of food items, saved for logging again later
+- MealTemplateItem: A food item within a meal template
 - WeeklyCheckin: Weekly progress and reflection entries
 - Goal: User goals (weight, strength, etc.)
 - DailyEvaluation: Daily habit and mood evaluation
@@ -216,6 +218,40 @@ class FoodItem(SQLModel, table=True):
     serving_label: Optional[str] = Field(default=None, description="Serving name used to log this amount, e.g. 'rice cake' (null if logged in grams directly)")
     serving_count: Optional[float] = Field(default=None, description="How many of the serving were logged, e.g. 3 (pairs with serving_label)")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
+
+
+class MealTemplate(SQLModel, table=True):
+    """
+    A reusable named combination of food items (e.g. "Usual Salad Bar Lunch"),
+    saved once and logged again later without re-searching for each item.
+    Independent of any specific logged day.
+    """
+    __tablename__ = "meal_templates"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(..., description="Template name (e.g., 'Usual Salad Bar Lunch')")
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
+
+
+class MealTemplateItem(SQLModel, table=True):
+    """
+    A single food item within a meal template, with macros already scaled to
+    the saved portion (mirrors FoodItem, minus the fields tied to a specific
+    logged meal).
+    """
+    __tablename__ = "meal_template_items"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    template_id: int = Field(..., foreign_key="meal_templates.id", description="Reference to the parent template")
+    name: str = Field(..., description="Food name (e.g., 'Chicken Breast')")
+    grams: float = Field(..., description="Quantity in grams")
+    calories: Optional[float] = Field(default=None, description="Calories in this food item")
+    protein_g: Optional[float] = Field(default=None, description="Protein in grams")
+    carbs_g: Optional[float] = Field(default=None, description="Carbohydrates in grams")
+    fat_g: Optional[float] = Field(default=None, description="Fat in grams")
+    fdc_id: Optional[int] = Field(default=None, description="USDA FoodData Central ID, for reference")
+    serving_label: Optional[str] = Field(default=None, description="Serving name used to log this amount, e.g. 'rice cake'")
+    serving_count: Optional[float] = Field(default=None, description="How many of the serving were logged, e.g. 3 (pairs with serving_label)")
 
 
 class WeeklyCheckin(SQLModel, table=True):

@@ -11,7 +11,9 @@ Endpoints:
 - PATCH /workouts/{id}: Update a workout (finish, add/edit exercises/sets)
 - DELETE /workouts/{id}: Delete a workout
 - GET /exercises/names: List distinct exercise names already used across all logged workouts
+- GET /exercises/logged: List logged exercises merged by base name, sorted by times done
 - GET /exercises/previous: Get the sets from the last time an exercise was logged
+- GET /exercises/progress: Get top set weight per workout for an exercise, for the Progress tab
 - GET /exercises/custom: List user-added custom exercise names
 - POST /exercises/custom: Persist a new custom exercise name for reuse in the picker
 - GET /foods/search: Search local food references (USDA + user-added) by description
@@ -30,6 +32,10 @@ Endpoints:
 - GET /meals/{id}: Get one meal with all food items and totals
 - PATCH /meals/{id}: Update a meal (name, date, add/edit/remove food items)
 - DELETE /meals/{id}: Delete a meal
+- POST /meal-templates: Save a reusable named combination of food items
+- GET /meal-templates: List all saved meal templates
+- PATCH /meal-templates/{id}: Update a meal template's name and items
+- DELETE /meal-templates/{id}: Delete a meal template
 - POST /checkins: Save a weekly check-in (photo + weight + measurements)
 - GET /checkins: List all check-ins (most recent first)
 - GET /checkins/{id}: Get one check-in
@@ -41,6 +47,7 @@ Endpoints:
 """
 
 import os
+import re
 import uuid
 from datetime import date, datetime
 from typing import List, Optional
@@ -55,7 +62,7 @@ from sqlalchemy import case, func
 
 from .config import FRONTEND_DIR, PHOTOS_DIR, HAND_MEASUREMENTS
 from .database import create_db_and_tables, get_session
-from .models import Workout, Exercise, CustomExercise, ExerciseSet, Food, UserFood, FoodServing, FoodOverride, Meal, FoodItem as FoodItemModel, WeeklyCheckin, Goal
+from .models import Workout, Exercise, CustomExercise, ExerciseSet, Food, UserFood, FoodServing, FoodOverride, Meal, FoodItem as FoodItemModel, MealTemplate, MealTemplateItem, WeeklyCheckin, Goal
 from .vision import analyze_food_photo as vision_analyze
 from .vision import analyze_nutrition_label as vision_analyze_label
 from .muscle_groups import guess_muscle_group
@@ -1431,6 +1438,222 @@ async def delete_meal(meal_id: int):
         return {"message": "Meal deleted successfully"}
 
 
+# ========== Meal Template Endpoints ==========
+class MealTemplateItemCreate(BaseModel):
+    """A single food item to save into a meal template, with macros already scaled to the saved portion."""
+    fdc_id: Optional[int] = None
+    name: str
+    grams: float
+    calories: float
+    protein_g: float
+    carbs_g: float
+    fat_g: float
+    serving_label: Optional[str] = None
+    serving_count: Optional[float] = None
+
+
+class MealTemplateCreate(BaseModel):
+    """Request model for saving a reusable meal template."""
+    name: str
+    items: List[MealTemplateItemCreate]
+
+
+class MealTemplateItemResponse(BaseModel):
+    """Response model for a saved meal template item."""
+    id: int
+    fdc_id: Optional[int]
+    name: str
+    grams: float
+    calories: Optional[float]
+    protein_g: Optional[float]
+    carbs_g: Optional[float]
+    fat_g: Optional[float]
+    serving_label: Optional[str] = None
+    serving_count: Optional[float] = None
+
+
+class MealTemplateResponse(BaseModel):
+    """Response model for a saved meal template with its items and totals."""
+    id: int
+    name: str
+    items: List[MealTemplateItemResponse]
+    total_calories: float
+    total_protein_g: float
+    total_carbs_g: float
+    total_fat_g: float
+
+
+def _meal_template_response(template: MealTemplate, items: List[MealTemplateItem]) -> MealTemplateResponse:
+    return MealTemplateResponse(
+        id=template.id,
+        name=template.name,
+        items=[
+            MealTemplateItemResponse(
+                id=i.id, fdc_id=i.fdc_id, name=i.name, grams=i.grams,
+                calories=i.calories, protein_g=i.protein_g, carbs_g=i.carbs_g, fat_g=i.fat_g,
+                serving_label=i.serving_label, serving_count=i.serving_count,
+            )
+            for i in items
+        ],
+        total_calories=sum(i.calories or 0 for i in items),
+        total_protein_g=sum(i.protein_g or 0 for i in items),
+        total_carbs_g=sum(i.carbs_g or 0 for i in items),
+        total_fat_g=sum(i.fat_g or 0 for i in items),
+    )
+
+
+@app.post("/meal-templates", response_model=MealTemplateResponse)
+async def create_meal_template(template: MealTemplateCreate):
+    """
+    Save a reusable combination of food items as a named template (e.g.
+    "Usual Salad Bar Lunch"), so it can be logged again later without
+    re-searching for each item. Independent of any specific logged day.
+
+    Args:
+        template: MealTemplateCreate with a name and a list of food items
+
+    Returns:
+        MealTemplateResponse: The saved template with its items and totals
+    """
+    if not template.items:
+        raise HTTPException(status_code=400, detail="Template must have at least one food item")
+
+    name = template.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Template name cannot be empty")
+
+    with get_session() as session:
+        db_template = MealTemplate(name=name)
+        session.add(db_template)
+        session.commit()
+        session.refresh(db_template)
+
+        db_items = []
+        for item in template.items:
+            db_item = MealTemplateItem(
+                template_id=db_template.id,
+                name=item.name,
+                grams=item.grams,
+                calories=item.calories,
+                protein_g=item.protein_g,
+                carbs_g=item.carbs_g,
+                fat_g=item.fat_g,
+                fdc_id=item.fdc_id,
+                serving_label=item.serving_label,
+                serving_count=item.serving_count,
+            )
+            session.add(db_item)
+            session.commit()
+            session.refresh(db_item)
+            db_items.append(db_item)
+
+        return _meal_template_response(db_template, db_items)
+
+
+@app.patch("/meal-templates/{template_id}", response_model=MealTemplateResponse)
+async def update_meal_template(template_id: int, template: MealTemplateCreate):
+    """
+    Update a meal template's name and items. Replaces all items with the
+    given list - simplest correct approach, since template items aren't
+    referenced anywhere else in the system.
+
+    Args:
+        template_id: The ID of the meal template to update
+        template: MealTemplateCreate with the new name and items
+
+    Returns:
+        MealTemplateResponse: The updated template with its items and totals
+    """
+    if not template.items:
+        raise HTTPException(status_code=400, detail="Template must have at least one food item")
+
+    name = template.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Template name cannot be empty")
+
+    with get_session() as session:
+        db_template = session.query(MealTemplate).filter(MealTemplate.id == template_id).first()
+        if not db_template:
+            raise HTTPException(status_code=404, detail="Meal template not found")
+
+        db_template.name = name
+        session.commit()
+        session.refresh(db_template)
+
+        session.query(MealTemplateItem).filter(
+            MealTemplateItem.template_id == template_id
+        ).delete(synchronize_session=False)
+        session.commit()
+
+        db_items = []
+        for item in template.items:
+            db_item = MealTemplateItem(
+                template_id=db_template.id,
+                name=item.name,
+                grams=item.grams,
+                calories=item.calories,
+                protein_g=item.protein_g,
+                carbs_g=item.carbs_g,
+                fat_g=item.fat_g,
+                fdc_id=item.fdc_id,
+                serving_label=item.serving_label,
+                serving_count=item.serving_count,
+            )
+            session.add(db_item)
+            session.commit()
+            session.refresh(db_item)
+            db_items.append(db_item)
+
+        return _meal_template_response(db_template, db_items)
+
+
+@app.get("/meal-templates", response_model=List[MealTemplateResponse])
+async def list_meal_templates():
+    """
+    List all saved meal templates with their items and totals, alphabetically
+    by name.
+
+    Returns:
+        List of MealTemplateResponse
+    """
+    with get_session() as session:
+        templates = session.query(MealTemplate).order_by(MealTemplate.name).all()
+
+        result = []
+        for t in templates:
+            items = session.query(MealTemplateItem).filter(
+                MealTemplateItem.template_id == t.id
+            ).order_by(MealTemplateItem.id).all()
+            result.append(_meal_template_response(t, items))
+
+        return result
+
+
+@app.delete("/meal-templates/{template_id}")
+async def delete_meal_template(template_id: int):
+    """
+    Delete a meal template and its items.
+
+    Args:
+        template_id: The ID of the meal template to delete
+
+    Returns:
+        dict: Success message
+    """
+    with get_session() as session:
+        template = session.query(MealTemplate).filter(MealTemplate.id == template_id).first()
+        if not template:
+            raise HTTPException(status_code=404, detail="Meal template not found")
+
+        session.query(MealTemplateItem).filter(
+            MealTemplateItem.template_id == template_id
+        ).delete(synchronize_session=False)
+        session.delete(template)
+        session.commit()
+
+        return {"message": "Meal template deleted successfully"}
+
+
 @app.delete("/workouts/{workout_id}")
 async def delete_workout(workout_id: int):
     """
@@ -1501,6 +1724,48 @@ class CustomExerciseCreate(BaseModel):
     name: str
 
 
+def _base_exercise_name(name: str) -> str:
+    """
+    Strip a trailing equipment qualifier like " (Barbell)" so e.g. "Romanian
+    Deadlift" and "Romanian Deadlift (Barbell)" are treated as the same
+    exercise when grouping logged history.
+    """
+    return re.sub(r"\s*\([^)]*\)\s*$", "", name).strip()
+
+
+@app.get("/exercises/logged")
+async def list_logged_exercises():
+    """
+    List exercises that have actually been logged in a workout, merged by
+    base name (stripping equipment qualifiers like "(Barbell)") so history
+    logged under slightly different names counts as the same exercise.
+    Sorted by how many times each has been logged, most-frequent first.
+    Read-only - does not change how workouts are stored.
+
+    Returns:
+        List of {name, count, variants} - name is the merged base name,
+        count is total times logged, variants lists the raw names merged into it
+    """
+    with get_session() as session:
+        rows = session.query(Exercise.name).all()
+
+        groups = {}
+        for (raw_name,) in rows:
+            base = _base_exercise_name(raw_name)
+            key = base.lower()
+            if key not in groups:
+                groups[key] = {"name": base, "count": 0, "variants": set()}
+            groups[key]["count"] += 1
+            groups[key]["variants"].add(raw_name)
+
+        result = [
+            {"name": g["name"], "count": g["count"], "variants": sorted(g["variants"])}
+            for g in groups.values()
+        ]
+        result.sort(key=lambda g: (-g["count"], g["name"].lower()))
+        return result
+
+
 @app.get("/exercises/names")
 async def list_exercise_names():
     """
@@ -1554,6 +1819,47 @@ async def get_previous_exercise_sets(name: str, exclude_workout_id: Optional[int
                 for s in sets
             ]
         }
+
+
+@app.get("/exercises/progress")
+async def get_exercise_progress(name: str):
+    """
+    Get the top set weight per day for an exercise, in date order, for the
+    Progress tab's strength trend chart. Matches by base name (stripping
+    equipment qualifiers like "(Barbell)"), so e.g. "Romanian Deadlift" and
+    "Romanian Deadlift (Barbell)" are combined into one trend line. Read-only
+    - does not change how workouts are stored.
+
+    Args:
+        name: Exercise name to look up (matched by base name, case-insensitive)
+
+    Returns:
+        List of {date, weight_kg}, one entry per day with a weighted set
+    """
+    target_base = _base_exercise_name(name).strip().lower()
+
+    with get_session() as session:
+        rows = session.query(Exercise, Workout.started_at).join(
+            Workout, Exercise.workout_id == Workout.id
+        ).order_by(Workout.started_at).all()
+
+        by_date = {}
+        for exercise, started_at in rows:
+            if _base_exercise_name(exercise.name).strip().lower() != target_base:
+                continue
+
+            top_set = session.query(ExerciseSet).filter(
+                ExerciseSet.exercise_id == exercise.id,
+                ExerciseSet.weight_kg.isnot(None)
+            ).order_by(ExerciseSet.weight_kg.desc()).first()
+            if not top_set:
+                continue
+
+            date_key = started_at.date().isoformat()
+            if date_key not in by_date or top_set.weight_kg > by_date[date_key]:
+                by_date[date_key] = top_set.weight_kg
+
+        return [{"date": d, "weight_kg": w} for d, w in sorted(by_date.items())]
 
 
 @app.get("/exercises/custom")
