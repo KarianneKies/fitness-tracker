@@ -7,6 +7,7 @@ This module defines all database models:
 - Workout: A complete workout session with start/end times
 - Exercise: An exercise performed during a workout (e.g., "Bench Press")
 - CustomExercise: A user-added exercise name, persisted for reuse in the picker
+- KneeExercise: An entry in the user's editable knee-strengthening exercise list
 - ExerciseSet: A single set of an exercise with reps, weight, rest
 - Meal: Meal records containing multiple food items
 - FoodItem: Individual food entries with nutrition data
@@ -156,6 +157,21 @@ class CustomExercise(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(..., unique=True, index=True, description="Exercise name as typed by the user")
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
+
+
+class KneeExercise(SQLModel, table=True):
+    """
+    Model for an entry in the user's knee-strengthening exercise list, as given
+    to them by their physiotherapist. Referenced by the workout suggestion
+    logic to guarantee at least one such exercise per recommendation. This is
+    just a prioritized category the user defined for themselves - not a
+    medical claim, and never presented as one.
+    """
+    __tablename__ = "knee_exercises"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(..., unique=True, index=True, description="Exercise name as it should appear in the picker")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
 
 

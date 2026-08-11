@@ -16,6 +16,10 @@ Endpoints:
 - GET /exercises/progress: Get top set weight per workout for an exercise, for the Progress tab
 - GET /exercises/custom: List user-added custom exercise names
 - POST /exercises/custom: Persist a new custom exercise name for reuse in the picker
+- GET /suggest-workout: Propose an all-upper-body or all-lower-body workout (~4-6 exercises) based on neglected muscles, glute priority, and the knee-strengthening list
+- GET /knee-exercises: List the user's knee-strengthening exercise list
+- POST /knee-exercises: Add an entry to the knee-strengthening list
+- DELETE /knee-exercises/{id}: Remove an entry from the knee-strengthening list
 - GET /foods/search: Search local food references (USDA + user-added) by description
 - POST /foods/label-scan: Extract product name/macros from a nutrition label photo
 - POST /foods/custom: Save a user-reviewed custom product
@@ -58,14 +62,15 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import case, func
+from sqlalchemy import case, func, or_
 
 from .config import FRONTEND_DIR, PHOTOS_DIR, HAND_MEASUREMENTS
 from .database import create_db_and_tables, get_session
-from .models import Workout, Exercise, CustomExercise, ExerciseSet, Food, UserFood, FoodServing, FoodOverride, Meal, FoodItem as FoodItemModel, MealTemplate, MealTemplateItem, WeeklyCheckin, Goal
+from .models import Workout, Exercise, CustomExercise, ExerciseSet, Food, UserFood, FoodServing, FoodOverride, Meal, FoodItem as FoodItemModel, MealTemplate, MealTemplateItem, WeeklyCheckin, Goal, KneeExercise
 from .vision import analyze_food_photo as vision_analyze
 from .vision import analyze_nutrition_label as vision_analyze_label
 from .muscle_groups import guess_muscle_group
+from .workout_suggestion import seed_default_knee_exercises, suggest_workout
 
 
 # Create FastAPI app
@@ -79,9 +84,11 @@ app = FastAPI(
 @app.on_event("startup")
 async def on_startup():
     """
-    Initialize database tables on application startup.
+    Initialize database tables and seed default data on application startup.
     """
     create_db_and_tables()
+    with get_session() as session:
+        seed_default_knee_exercises(session)
 
 
 # CORS middleware (local development only)
@@ -1794,7 +1801,12 @@ async def get_previous_exercise_sets(name: str, exclude_workout_id: Optional[int
             workout itself, so it doesn't match against its own just-added sets)
 
     Returns:
-        dict with the source workout_id (or null) and its sets in order
+        dict with the source workout_id (or null) and its sets in order.
+        Warmup sets (note="Warmup", from imported history) are left out -
+        the frontend matches "Previous" to today's sets by position, and a
+        warmup's much lighter weight/reps isn't a meaningful comparison for
+        a working set. Dropsets and to-failure sets are kept, since they're
+        still real working data.
     """
     with get_session() as session:
         query = session.query(Exercise).join(Workout, Exercise.workout_id == Workout.id).filter(
@@ -1809,13 +1821,20 @@ async def get_previous_exercise_sets(name: str, exclude_workout_id: Optional[int
             return {"workout_id": None, "sets": []}
 
         sets = session.query(ExerciseSet).filter(
-            ExerciseSet.exercise_id == previous_exercise.id
+            ExerciseSet.exercise_id == previous_exercise.id,
+            or_(ExerciseSet.note != "Warmup", ExerciseSet.note.is_(None)),
         ).order_by(ExerciseSet.order).all()
 
         return {
             "workout_id": previous_exercise.workout_id,
             "sets": [
-                {"order": s.order, "weight_kg": s.weight_kg, "reps": s.reps, "hold_seconds": s.hold_seconds}
+                {
+                    "order": s.order,
+                    "weight_kg": s.weight_kg,
+                    "reps": s.reps,
+                    "hold_seconds": s.hold_seconds,
+                    "to_failure": s.to_failure,
+                }
                 for s in sets
             ]
         }
@@ -1905,6 +1924,112 @@ async def create_custom_exercise(payload: CustomExerciseCreate):
         session.refresh(custom_exercise)
 
         return {"id": custom_exercise.id, "name": custom_exercise.name}
+
+
+# ========== Workout Suggestion Models ==========
+class SuggestedExerciseResponse(BaseModel):
+    """Response model for one exercise in a proposed workout."""
+    name: str
+    muscle_group: str
+    reason: str
+
+
+class KneeExerciseCreate(BaseModel):
+    """Request model for adding an entry to the knee-strengthening list."""
+    name: str
+
+
+@app.get("/suggest-workout", response_model=List[SuggestedExerciseResponse])
+async def get_suggested_workout(split: Optional[str] = None):
+    """
+    Propose a workout for the "Recommended Workout" review screen. Every
+    proposal is all upper-body or all lower-body, never mixed. On a
+    lower-body day, a glute-focused exercise and a knee-strengthening
+    exercise are always included. A suggestion only - the user reviews it
+    and chooses whether to start it, shuffle for another, or go back.
+
+    Args:
+        split: "upper" or "lower" to pick the split yourself; omit to let
+            it auto-decide based on whichever side is more neglected in the
+            last 7 days (biased toward lower body for glute priority)
+
+    Returns:
+        List[SuggestedExerciseResponse]: ~4-6 proposed exercises, each with
+        its target muscle group and a short reason it was picked
+    """
+    if split is not None and split.lower() not in ("upper", "lower"):
+        raise HTTPException(status_code=400, detail="split must be 'upper' or 'lower'")
+
+    with get_session() as session:
+        return suggest_workout(session, split=split)
+
+
+@app.get("/knee-exercises")
+async def list_knee_exercises():
+    """
+    List the user's knee-strengthening exercise list (editable, seeded with
+    physio-given defaults on first run), most recently added first.
+
+    Returns:
+        List of knee exercises with their id and name
+    """
+    with get_session() as session:
+        rows = session.query(KneeExercise).order_by(KneeExercise.created_at.desc()).all()
+        return [{"id": r.id, "name": r.name} for r in rows]
+
+
+@app.post("/knee-exercises")
+async def create_knee_exercise(payload: KneeExerciseCreate):
+    """
+    Add an entry to the knee-strengthening list. Idempotent by name
+    (case-insensitive): re-adding an existing name returns the existing
+    record instead of creating a duplicate.
+
+    Args:
+        payload: KneeExerciseCreate with the exercise name
+
+    Returns:
+        The created (or already-existing) knee exercise
+    """
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Exercise name cannot be empty")
+
+    with get_session() as session:
+        existing = session.query(KneeExercise).filter(
+            func.lower(KneeExercise.name) == name.lower()
+        ).first()
+        if existing:
+            return {"id": existing.id, "name": existing.name}
+
+        knee_exercise = KneeExercise(name=name)
+        session.add(knee_exercise)
+        session.commit()
+        session.refresh(knee_exercise)
+
+        return {"id": knee_exercise.id, "name": knee_exercise.name}
+
+
+@app.delete("/knee-exercises/{knee_exercise_id}")
+async def delete_knee_exercise(knee_exercise_id: int):
+    """
+    Remove an entry from the knee-strengthening list.
+
+    Args:
+        knee_exercise_id: The id of the KneeExercise row to delete
+
+    Returns:
+        dict: Success message
+    """
+    with get_session() as session:
+        db_entry = session.query(KneeExercise).filter(KneeExercise.id == knee_exercise_id).first()
+        if not db_entry:
+            raise HTTPException(status_code=404, detail="Knee exercise not found")
+
+        session.delete(db_entry)
+        session.commit()
+
+        return {"message": "Knee exercise deleted successfully"}
 
 
 # ========== Weekly Check-in Models ==========

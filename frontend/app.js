@@ -211,6 +211,52 @@ async function loadLoggedExerciseNames() {
     }
 }
 
+// Knee-strengthening list settings (view/add/remove) - a prioritized
+// category the user defined from physio guidance, referenced by the
+// Recommended Workout suggestion. Not presented as medical advice.
+async function loadKneeExercises() {
+    const container = document.getElementById('knee-exercise-list');
+    if (!container) return;
+    try {
+        const entries = await api.get('/knee-exercises');
+        renderKneeExercises(entries);
+    } catch (error) {
+        console.error('Error loading knee exercises:', error);
+        container.textContent = 'Failed to load.';
+    }
+}
+
+function renderKneeExercises(entries) {
+    const container = document.getElementById('knee-exercise-list');
+    if (!container) return;
+
+    if (!entries || entries.length === 0) {
+        container.className = 'empty-state';
+        container.textContent = 'No knee-strengthening exercises yet.';
+        return;
+    }
+
+    container.className = '';
+    container.innerHTML = entries.map(entry => `
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0; border-bottom: 1px solid #f0f0f0;">
+            <span>${entry.name}</span>
+            <button data-knee-id="${entry.id}" class="knee-exercise-remove-btn" style="background: none; border: none; color: #dc3545; font-size: 1.1rem; cursor: pointer; padding: 0.25rem;">&times;</button>
+        </div>
+    `).join('');
+
+    container.querySelectorAll('.knee-exercise-remove-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            try {
+                await api.delete(`/knee-exercises/${btn.dataset.kneeId}`);
+                loadKneeExercises();
+            } catch (error) {
+                console.error('Error removing knee exercise:', error);
+                alert('Failed to remove exercise');
+            }
+        });
+    });
+}
+
 // Tab switching functionality
 function initTabs() {
     const tabs = document.querySelectorAll('.tab');
@@ -483,7 +529,8 @@ async function loadPreviousSetsForExercise(exercise) {
     renderExercises();
 }
 
-// Format a previous set for display, e.g. "45 kg × 8" or "30s hold"
+// Format a previous set for display, e.g. "45 kg × 8" or "30s hold", with a
+// red "F" appended when that set was taken to failure.
 function formatPreviousSet(prev) {
     if (!prev) return null;
     const parts = [];
@@ -493,7 +540,42 @@ function formatPreviousSet(prev) {
     if (prev.hold_seconds !== null && prev.hold_seconds !== undefined) {
         text = text ? `${text} · ${prev.hold_seconds}s hold` : `${prev.hold_seconds}s hold`;
     }
-    return text || null;
+    if (!text) return null;
+    if (prev.to_failure) {
+        text += ' <span style="color: #dc3545; font-weight: bold;">F</span>';
+    }
+    return text;
+}
+
+// Add a new exercise (by name) to the active workout: pushes it locally,
+// persists it, then reconciles the local copy with the saved id. Shared by
+// the exercise picker's "add new" path and the recommended-workout
+// "Start this workout" flow, which adds several exercises the same way.
+async function addExerciseByName(name) {
+    const newExercise = {
+        id: null,
+        workout_id: activeWorkout.id,
+        name,
+        order: exercisesData.length + 1,
+        sets: []
+    };
+    exercisesData.push(newExercise);
+
+    try {
+        const savedExercise = await saveExerciseToBackend(newExercise, true);
+        const tempIndex = exercisesData.findIndex(ex => !ex.id);
+        if (tempIndex !== -1) {
+            // Make a deep copy of the saved exercise to avoid reference issues
+            exercisesData[tempIndex] = JSON.parse(JSON.stringify(savedExercise));
+            renderExercises();
+            loadPreviousSetsForExercise(exercisesData[tempIndex]);
+        }
+        return true;
+    } catch (err) {
+        console.error('Error saving exercise:', err);
+        alert('Failed to save exercise');
+        return false;
+    }
 }
 
 window.selectExercise = function(exerciseName) {
@@ -501,17 +583,9 @@ window.selectExercise = function(exerciseName) {
 
     // Check if we're replacing an existing exercise
     const replaceIndex = modal.dataset.replaceIndex;
-    
+
     // Add to active workout
     if (activeWorkout && exerciseName) {
-        const newExercise = {
-            id: null,
-            workout_id: activeWorkout.id,
-            name: exerciseName,
-            order: exercisesData.length + 1,
-            sets: []
-        };
-        
         if (replaceIndex !== undefined) {
             // Replace existing exercise
             const index = parseInt(replaceIndex);
@@ -545,33 +619,10 @@ window.selectExercise = function(exerciseName) {
                     });
             }
         } else {
-            // Add new exercise
-            exercisesData.push(newExercise);
-            
-            console.log('Before save:', exercisesData.length, 'exercises');
-            
-            // Save to backend immediately
-            saveExerciseToBackend(newExercise, true)
-                .then(savedExercise => {
-                    console.log('Saved exercise:', savedExercise);
-                    // Replace temp exercise with saved one - create a copy to avoid reference issues
-                    const tempIndex = exercisesData.findIndex(ex => !ex.id);
-                    console.log('Temp index found:', tempIndex);
-                    if (tempIndex !== -1) {
-                        // Make a deep copy of the saved exercise to avoid reference issues
-                        exercisesData[tempIndex] = JSON.parse(JSON.stringify(savedExercise));
-                        console.log('After replace:', exercisesData);
-                        renderExercises();
-                        loadPreviousSetsForExercise(exercisesData[tempIndex]);
-                    }
-                })
-                .catch(err => {
-                    console.error('Error saving exercise:', err);
-                    alert('Failed to save exercise');
-                });
+            addExerciseByName(exerciseName);
         }
     }
-    
+
     hideExercisePicker();
 };
 
@@ -1076,6 +1127,248 @@ function renumberSets(exerciseIndex) {
     }
 }
 
+// Start a blank active workout (the original "Start Workout" behaviour,
+// now one of the choices on the start-workout screen).
+async function startEmptyWorkout() {
+    try {
+        const workout = await api.post('/workouts', { notes: 'My workout' });
+
+        activeWorkout = {
+            id: workout.id,
+            started_at: workout.started_at
+        };
+
+        // Show active workout section, hide start button
+        document.getElementById('start-workout-section').style.display = 'none';
+        document.getElementById('active-workout-section').style.display = 'block';
+
+        // Set active workout ID display
+        document.getElementById('active-workout-id').textContent = `Workout #${workout.id}`;
+
+        // Start the timer, anchored to the server-recorded start time
+        timer.start(activeWorkout.started_at);
+
+        // Reset exercises data for new workout - ensure we have a NEW array, not just empty
+        if (exercisesData === null || exercisesData === undefined) {
+            exercisesData = [];
+        } else {
+            exercisesData.length = 0; // Clear existing array
+        }
+
+        renderExercises();
+
+        // Ensure finish button is enabled for new workout
+        const finishBtn = document.getElementById('finish-workout');
+        if (finishBtn) {
+            finishBtn.textContent = 'Finish';
+            finishBtn.disabled = false;
+            finishBtn.style.opacity = '1';
+        }
+    } catch (error) {
+        console.error('Error starting workout:', error);
+        alert('Failed to start workout');
+    }
+}
+
+// Start-workout choice screen: "Empty Workout" (current behaviour) vs.
+// "Recommended Workout" (suggested exercises, reviewed before starting).
+function showStartWorkoutChoice() {
+    const modal = document.createElement('div');
+    modal.id = 'start-workout-choice-modal';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    `;
+
+    const content = document.createElement('div');
+    content.style.cssText = `
+        background: white;
+        border-radius: 12px;
+        width: 90%;
+        max-width: 400px;
+        padding: 1.25rem;
+    `;
+
+    content.innerHTML = `
+        <h3 style="margin-bottom: 1rem;">Start Workout</h3>
+        <div id="choice-empty-workout" class="card" style="cursor: pointer; margin-bottom: 0.75rem;">
+            <strong>Empty Workout</strong>
+            <div style="font-size: 0.85rem; color: #666; margin-top: 0.25rem;">Start a blank workout and add exercises as you go.</div>
+        </div>
+        <div id="choice-recommended-workout" class="card" style="cursor: pointer; margin-bottom: 1rem;">
+            <strong>Recommended Workout</strong>
+            <div style="font-size: 0.85rem; color: #666; margin-top: 0.25rem;">Get a suggested workout to review before starting.</div>
+        </div>
+        <button id="choice-cancel-btn" class="btn btn-secondary" style="width: 100%;">Cancel</button>
+    `;
+
+    modal.appendChild(content);
+    document.body.appendChild(modal);
+
+    document.getElementById('choice-empty-workout').onclick = () => {
+        modal.remove();
+        startEmptyWorkout();
+    };
+    document.getElementById('choice-recommended-workout').onclick = () => {
+        modal.remove();
+        showSplitChoice();
+    };
+    document.getElementById('choice-cancel-btn').onclick = () => modal.remove();
+}
+
+// Upper/lower choice screen, shown after picking "Recommended Workout" -
+// every suggestion is all-upper or all-lower, so the user picks which.
+function showSplitChoice() {
+    const modal = document.createElement('div');
+    modal.id = 'split-choice-modal';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    `;
+
+    const content = document.createElement('div');
+    content.style.cssText = `
+        background: white;
+        border-radius: 12px;
+        width: 90%;
+        max-width: 400px;
+        padding: 1.25rem;
+    `;
+
+    content.innerHTML = `
+        <h3 style="margin-bottom: 1rem;">Recommended Workout</h3>
+        <div id="choice-upper-body" class="card" style="cursor: pointer; margin-bottom: 0.75rem; text-align: center;">
+            <strong>Upper Body</strong>
+        </div>
+        <div id="choice-lower-body" class="card" style="cursor: pointer; margin-bottom: 1rem; text-align: center;">
+            <strong>Lower Body</strong>
+        </div>
+        <button id="split-back-btn" class="btn btn-secondary" style="width: 100%;">Back</button>
+    `;
+
+    modal.appendChild(content);
+    document.body.appendChild(modal);
+
+    document.getElementById('choice-upper-body').onclick = () => {
+        modal.remove();
+        showRecommendedWorkoutReview('upper');
+    };
+    document.getElementById('choice-lower-body').onclick = () => {
+        modal.remove();
+        showRecommendedWorkoutReview('lower');
+    };
+    document.getElementById('split-back-btn').onclick = () => {
+        modal.remove();
+        showStartWorkoutChoice();
+    };
+}
+
+// Fetch a proposed workout for the given split and show it on the review screen.
+async function showRecommendedWorkoutReview(split) {
+    let suggestion;
+    try {
+        suggestion = await api.get(`/suggest-workout?split=${split}`);
+    } catch (error) {
+        console.error('Error fetching workout suggestion:', error);
+        alert('Failed to get a recommended workout');
+        showSplitChoice();
+        return;
+    }
+    renderRecommendedWorkoutModal(suggestion, split);
+}
+
+// Review screen for a proposed workout: each exercise with its reason,
+// plus Start this workout / Shuffle / Back.
+function renderRecommendedWorkoutModal(suggestion, split) {
+    let modal = document.getElementById('recommended-workout-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'recommended-workout-modal';
+        modal.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        document.body.appendChild(modal);
+    }
+
+    const rows = suggestion.map(ex => `
+        <div class="card" style="margin-bottom: 0.5rem;">
+            <strong>${ex.name}</strong>
+            <div style="font-size: 0.8rem; color: #888; margin-top: 0.15rem;">${ex.muscle_group}</div>
+            <div style="font-size: 0.85rem; color: #e94560; margin-top: 0.25rem;">${ex.reason}</div>
+        </div>
+    `).join('');
+
+    const splitLabel = split === 'lower' ? 'Lower Body' : 'Upper Body';
+
+    modal.innerHTML = `
+        <div style="background: white; border-radius: 12px; width: 90%; max-width: 400px; max-height: 80vh; display: flex; flex-direction: column;">
+            <div style="padding: 1rem; border-bottom: 1px solid #eee;">
+                <h3>Recommended Workout — ${splitLabel}</h3>
+            </div>
+            <div style="padding: 0.75rem 1rem; overflow-y: auto; flex: 1;">
+                ${rows || '<p style="text-align: center; color: #888;">No suggestion available yet - log a few exercises first.</p>'}
+            </div>
+            <div style="padding: 1rem; border-top: 1px solid #eee;">
+                <button id="recommended-start-btn" class="btn" style="width: 100%; margin-bottom: 0.5rem;">Start this workout</button>
+                <button id="recommended-shuffle-btn" class="btn btn-secondary" style="width: 100%; margin-bottom: 0.5rem;">Shuffle</button>
+                <button id="recommended-back-btn" class="btn btn-secondary" style="width: 100%;">Back</button>
+            </div>
+        </div>
+    `;
+
+    document.getElementById('recommended-start-btn').onclick = () => startRecommendedWorkout(suggestion, modal);
+    document.getElementById('recommended-shuffle-btn').onclick = async () => {
+        try {
+            const nextSuggestion = await api.get(`/suggest-workout?split=${split}`);
+            renderRecommendedWorkoutModal(nextSuggestion, split);
+        } catch (error) {
+            console.error('Error shuffling workout suggestion:', error);
+            alert('Failed to get a new suggestion');
+        }
+    };
+    document.getElementById('recommended-back-btn').onclick = () => {
+        modal.remove();
+        showSplitChoice();
+    };
+}
+
+// "Start this workout": opens a new active workout, then adds each
+// proposed exercise the same way the exercise picker does (sequentially,
+// since each add persists to the backend and reads back the current list).
+async function startRecommendedWorkout(suggestion, modal) {
+    modal.remove();
+    await startEmptyWorkout();
+    if (!activeWorkout) return; // startEmptyWorkout already alerted on failure
+    for (const ex of suggestion) {
+        await addExerciseByName(ex.name);
+    }
+}
+
 // Initialize workout on DOM ready
 document.addEventListener('DOMContentLoaded', () => {
     console.log('Fitness Tracker App initialized');
@@ -1086,6 +1379,29 @@ document.addEventListener('DOMContentLoaded', () => {
     // Load persisted custom exercise names for the exercise picker
     loadCustomExercises();
     loadLoggedExerciseNames();
+    loadKneeExercises();
+
+    // Add-exercise controls for the knee-strengthening list
+    const kneeAddBtn = document.getElementById('knee-exercise-add-btn');
+    const kneeInput = document.getElementById('knee-exercise-input');
+    if (kneeAddBtn && kneeInput) {
+        const addKneeExercise = async () => {
+            const name = kneeInput.value.trim();
+            if (!name) return;
+            try {
+                await api.post('/knee-exercises', { name });
+                kneeInput.value = '';
+                loadKneeExercises();
+            } catch (error) {
+                console.error('Error adding knee exercise:', error);
+                alert('Failed to add exercise');
+            }
+        };
+        kneeAddBtn.addEventListener('click', addKneeExercise);
+        kneeInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') addKneeExercise();
+        });
+    }
 
     // Initialize food photo analysis functionality
     if (typeof foodPhoto !== 'undefined' && foodPhoto.init) {
@@ -1112,51 +1428,12 @@ document.addEventListener('DOMContentLoaded', () => {
         progress.init();
     }
 
-    // Start new workout button
+    // Start new workout button: opens the choice screen (Empty vs. Recommended)
+    // instead of starting a blank workout directly.
     const startWorkoutBtn = document.getElementById('start-new-workout');
     if (startWorkoutBtn) {
-        startWorkoutBtn.addEventListener('click', async () => {
-            try {
-                const workout = await api.post('/workouts', { notes: 'My workout' });
-                
-                activeWorkout = {
-                    id: workout.id,
-                    started_at: workout.started_at
-                };
-                
-                // Show active workout section, hide start button
-                document.getElementById('start-workout-section').style.display = 'none';
-                document.getElementById('active-workout-section').style.display = 'block';
-                
-                // Set active workout ID display
-                document.getElementById('active-workout-id').textContent = `Workout #${workout.id}`;
-                
-                // Start the timer, anchored to the server-recorded start time
-                timer.start(activeWorkout.started_at);
-
-                // Reset exercises data for new workout - ensure we have a NEW array, not just empty
-                if (exercisesData === null || exercisesData === undefined) {
-                    exercisesData = [];
-                } else {
-                    exercisesData.length = 0; // Clear existing array
-                }
-                
-                renderExercises();
-                
-                // Ensure finish button is enabled for new workout
-                const finishBtn = document.getElementById('finish-workout');
-                if (finishBtn) {
-                    finishBtn.textContent = 'Finish';
-                    finishBtn.disabled = false;
-                    finishBtn.style.opacity = '1';
-                }
-                
-                console.log('New workout started, activeWorkout:', activeWorkout);
-                
-            } catch (error) {
-                console.error('Error starting workout:', error);
-                alert('Failed to start workout');
-            }
+        startWorkoutBtn.addEventListener('click', () => {
+            showStartWorkoutChoice();
         });
     }
     
