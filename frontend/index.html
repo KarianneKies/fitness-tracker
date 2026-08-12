@@ -742,6 +742,7 @@
             <div class="tab" data-tab="food">Food</div>
             <div class="tab" data-tab="workout">Workout</div>
             <div class="tab" data-tab="checkin">Check-in</div>
+            <div class="tab" data-tab="progress">Progress</div>
         </nav>
         
         <main class="content-area">
@@ -851,26 +852,29 @@
                 <!-- Hidden file input for photo capture (opens the native camera on mobile) -->
                 <input type="file" id="photo-input" accept="image/*" capture="environment" style="display: none;">
 
-                <!-- Add Meal entry point -->
+                <!-- Add Meal entry points -->
                 <div class="card" id="add-meal-card">
                     <button id="add-meal-btn" class="btn btn-secondary">+ Add Meal</button>
+                    <button id="add-from-template-btn" class="btn btn-secondary" style="margin-top: 0.5rem;">📋 Add from Template</button>
                 </div>
 
                 <!-- Meal builder screen: search & add foods, edit portions, running total -->
                 <div id="search-meal-section" class="card" style="display: none;">
                     <h3 id="meal-builder-title">New Meal</h3>
 
-                    <label for="meal-type-select" style="font-size: 0.85rem; color: #666;">Meal type</label>
-                    <select id="meal-type-select" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
-                        <option value="">Meal</option>
-                        <option value="Breakfast">Breakfast</option>
-                        <option value="Lunch">Lunch</option>
-                        <option value="Dinner">Dinner</option>
-                        <option value="Snack">Snack</option>
-                    </select>
+                    <label for="meal-name-input" style="font-size: 0.85rem; color: #666;">Meal name</label>
+                    <input type="text" id="meal-name-input" placeholder="e.g. Lunch, or Lunch - Salad Bar (work)" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.5rem;">
+                    <div style="display: flex; gap: 0.4rem; margin-bottom: 0.75rem;">
+                        <button type="button" class="btn btn-secondary meal-quick-name-btn" data-name="Breakfast" style="flex: 1; padding: 0.4rem; font-size: 0.8rem;">Breakfast</button>
+                        <button type="button" class="btn btn-secondary meal-quick-name-btn" data-name="Lunch" style="flex: 1; padding: 0.4rem; font-size: 0.8rem;">Lunch</button>
+                        <button type="button" class="btn btn-secondary meal-quick-name-btn" data-name="Dinner" style="flex: 1; padding: 0.4rem; font-size: 0.8rem;">Dinner</button>
+                        <button type="button" class="btn btn-secondary meal-quick-name-btn" data-name="Snack" style="flex: 1; padding: 0.4rem; font-size: 0.8rem;">Snack</button>
+                    </div>
 
-                    <label for="meal-date-input" style="font-size: 0.85rem; color: #666;">Date</label>
-                    <input type="date" id="meal-date-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                    <div id="meal-date-row">
+                        <label for="meal-date-input" style="font-size: 0.85rem; color: #666;">Date</label>
+                        <input type="date" id="meal-date-input" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                    </div>
 
                     <button id="add-food-btn" class="btn">🔍 Add Food</button>
 
@@ -880,6 +884,7 @@
                     <div id="search-meal-total" style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #eee; font-weight: bold;"></div>
 
                     <button id="save-search-meal-btn" class="btn" style="margin-top: 1rem;">Save Meal</button>
+                    <button id="save-as-template-btn" class="btn btn-secondary" style="margin-top: 0.5rem;">💾 Save as Template</button>
                     <button id="clear-search-meal-btn" class="btn btn-secondary" style="margin-top: 0.5rem;">Cancel</button>
                 </div>
 
@@ -936,8 +941,19 @@
                     </div>
                 </div>
 
+                <!-- Knee-Strengthening List (settings) -->
+                <div class="card">
+                    <h3 style="margin-bottom: 0.25rem;">Knee-Strengthening List</h3>
+                    <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.75rem;">Exercises you've prioritized for knee strength. The Recommended Workout always includes one of these.</div>
+                    <div id="knee-exercise-list" class="empty-state">Loading…</div>
+                    <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
+                        <input type="text" id="knee-exercise-input" placeholder="Add an exercise…" style="flex: 1; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.9rem;">
+                        <button id="knee-exercise-add-btn" class="btn btn-secondary" style="width: auto; padding: 0.5rem 1rem;">Add</button>
+                    </div>
+                </div>
+
             </div>
-            
+
             <!-- Check-in Tab -->
             <div id="checkin" class="tab-content">
                 <h2 style="margin-bottom: 1rem;">Weekly Check-in</h2>
@@ -1002,10 +1018,33 @@
                     </div>
                 </div>
             </div>
-            
+
+            <div id="progress" class="tab-content">
+                <h2 style="margin-bottom: 1rem;">Progress</h2>
+
+                <div class="card">
+                    <h3>Weight</h3>
+                    <div id="progress-weight-chart" class="empty-state">Not enough check-in data yet.</div>
+                </div>
+
+                <div class="card">
+                    <h3>Calories vs. Goal</h3>
+                    <div id="progress-calories-chart" class="empty-state">Not enough meal data yet.</div>
+                </div>
+
+                <div class="card">
+                    <h3>Strength Progression</h3>
+                    <label for="progress-exercise-select" style="font-size: 0.85rem; color: #666;">Exercise</label>
+                    <select id="progress-exercise-select" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        <option value="">Select an exercise…</option>
+                    </select>
+                    <div id="progress-strength-chart" class="empty-state">Pick an exercise to see its progression.</div>
+                </div>
+            </div>
+
         </main>
     </div>
     
-    <script type="module" src="app.js?v=20260805-12"></script>
+    <script type="module" src="app.js?v=20260810-2"></script>
 </body>
 </html>
