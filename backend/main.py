@@ -10,6 +10,10 @@ Endpoints:
 - GET /workouts/{id}: Get one workout with all exercises and sets
 - PATCH /workouts/{id}: Update a workout (finish, add/edit exercises/sets)
 - DELETE /workouts/{id}: Delete a workout
+- GET /exercises/names: List distinct exercise names already used across all logged workouts
+- GET /exercises/previous: Get the sets from the last time an exercise was logged
+- GET /exercises/custom: List user-added custom exercise names
+- POST /exercises/custom: Persist a new custom exercise name for reuse in the picker
 - GET /foods/search: Search local food references (USDA + user-added) by description
 - POST /foods/label-scan: Extract product name/macros from a nutrition label photo
 - POST /foods/custom: Save a user-reviewed custom product
@@ -51,7 +55,7 @@ from sqlalchemy import case, func
 
 from .config import FRONTEND_DIR, PHOTOS_DIR, HAND_MEASUREMENTS
 from .database import create_db_and_tables, get_session
-from .models import Workout, Exercise, ExerciseSet, Food, UserFood, FoodServing, FoodOverride, Meal, FoodItem as FoodItemModel, WeeklyCheckin, Goal
+from .models import Workout, Exercise, CustomExercise, ExerciseSet, Food, UserFood, FoodServing, FoodOverride, Meal, FoodItem as FoodItemModel, WeeklyCheckin, Goal
 from .vision import analyze_food_photo as vision_analyze
 from .vision import analyze_nutrition_label as vision_analyze_label
 from .muscle_groups import guess_muscle_group
@@ -1460,6 +1464,141 @@ async def delete_workout(workout_id: int):
         session.commit()
 
         return {"message": "Workout deleted successfully"}
+
+
+@app.delete("/workouts/{workout_id}/exercises/{exercise_id}")
+async def delete_exercise(workout_id: int, exercise_id: int):
+    """
+    Remove a single exercise (and its sets) from a workout, identified by its unique id.
+
+    Args:
+        workout_id: The ID of the workout the exercise belongs to
+        exercise_id: The ID of the exercise to remove
+
+    Returns:
+        dict: Success message
+    """
+    with get_session() as session:
+        exercise = session.query(Exercise).filter(
+            Exercise.id == exercise_id,
+            Exercise.workout_id == workout_id
+        ).first()
+        if not exercise:
+            raise HTTPException(status_code=404, detail="Exercise not found")
+
+        session.query(ExerciseSet).filter(
+            ExerciseSet.exercise_id == exercise_id
+        ).delete(synchronize_session=False)
+
+        session.delete(exercise)
+        session.commit()
+
+        return {"message": "Exercise deleted successfully"}
+
+
+class CustomExerciseCreate(BaseModel):
+    """Request body for creating a custom exercise."""
+    name: str
+
+
+@app.get("/exercises/names")
+async def list_exercise_names():
+    """
+    List the distinct exercise names already used across all logged workouts
+    (e.g. from imported history), sorted alphabetically. Read-only - does not
+    change how workouts are stored.
+
+    Returns:
+        List of distinct exercise name strings
+    """
+    with get_session() as session:
+        rows = session.query(Exercise.name).distinct().order_by(Exercise.name).all()
+        return [r[0] for r in rows]
+
+
+@app.get("/exercises/previous")
+async def get_previous_exercise_sets(name: str, exclude_workout_id: Optional[int] = None):
+    """
+    Get the sets logged for an exercise the last time it was done, so the picker
+    can show "Previous" reference values. Read-only - does not change how
+    workouts are stored.
+
+    Args:
+        name: Exercise name to look up (case-insensitive)
+        exclude_workout_id: Optional workout id to exclude (e.g. the active
+            workout itself, so it doesn't match against its own just-added sets)
+
+    Returns:
+        dict with the source workout_id (or null) and its sets in order
+    """
+    with get_session() as session:
+        query = session.query(Exercise).join(Workout, Exercise.workout_id == Workout.id).filter(
+            func.lower(Exercise.name) == name.strip().lower()
+        )
+        if exclude_workout_id is not None:
+            query = query.filter(Exercise.workout_id != exclude_workout_id)
+
+        previous_exercise = query.order_by(Workout.started_at.desc(), Exercise.id.desc()).first()
+
+        if not previous_exercise:
+            return {"workout_id": None, "sets": []}
+
+        sets = session.query(ExerciseSet).filter(
+            ExerciseSet.exercise_id == previous_exercise.id
+        ).order_by(ExerciseSet.order).all()
+
+        return {
+            "workout_id": previous_exercise.workout_id,
+            "sets": [
+                {"order": s.order, "weight_kg": s.weight_kg, "reps": s.reps, "hold_seconds": s.hold_seconds}
+                for s in sets
+            ]
+        }
+
+
+@app.get("/exercises/custom")
+async def list_custom_exercises():
+    """
+    List all user-added custom exercise names, most recently added first.
+
+    Returns:
+        List of custom exercises with their id and name
+    """
+    with get_session() as session:
+        rows = session.query(CustomExercise).order_by(CustomExercise.created_at.desc()).all()
+        return [{"id": r.id, "name": r.name} for r in rows]
+
+
+@app.post("/exercises/custom")
+async def create_custom_exercise(payload: CustomExerciseCreate):
+    """
+    Persist a user-typed exercise name so it appears in the exercise picker
+    on future workouts. Idempotent by name (case-insensitive): re-adding an
+    existing name returns the existing record instead of creating a duplicate.
+
+    Args:
+        payload: CustomExerciseCreate with the exercise name
+
+    Returns:
+        The created (or already-existing) custom exercise
+    """
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Exercise name cannot be empty")
+
+    with get_session() as session:
+        existing = session.query(CustomExercise).filter(
+            func.lower(CustomExercise.name) == name.lower()
+        ).first()
+        if existing:
+            return {"id": existing.id, "name": existing.name}
+
+        custom_exercise = CustomExercise(name=name)
+        session.add(custom_exercise)
+        session.commit()
+        session.refresh(custom_exercise)
+
+        return {"id": custom_exercise.id, "name": custom_exercise.name}
 
 
 # ========== Weekly Check-in Models ==========
