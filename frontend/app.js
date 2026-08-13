@@ -5078,8 +5078,8 @@ function createDayCard(day) {
                 <span class="day-card-date">${formattedDate}</span>
                 <span class="day-card-toggle">▼</span>
             </div>
+            ${createDayTotals(day.daily_totals)}
             <div class="day-card-body">
-                ${createDayTotals(day.daily_totals)}
                 <div class="day-card-meals">
                     ${day.meals.map(meal => createMealCard(meal)).join('')}
                 </div>
