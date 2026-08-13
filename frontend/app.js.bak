@@ -285,15 +285,20 @@ function initTabs() {
                 }
             }
 
-            // Load the nutrition diary (saved meals) and meal templates for Food tab
-            if (tabId === 'food') {
-                loadNutritionDiary();
-                if (typeof foodSearch !== 'undefined') foodSearch.loadMealTemplates();
+            // Load saved meals and meal templates for Food tab
+            if (tabId === 'food' && typeof foodSearch !== 'undefined') {
+                foodSearch.loadSavedMeals();
+                foodSearch.loadMealTemplates();
             }
 
             // Load check-ins for Check-in tab
             if (tabId === 'checkin' && typeof checkin !== 'undefined') {
                 checkin.loadCheckins();
+            }
+
+            // Load nutrition diary for Diary tab
+            if (tabId === 'diary') {
+                loadNutritionDiary();
             }
 
             // Refresh Today's Overview when returning to it
@@ -2376,7 +2381,7 @@ const foodSearch = {
             });
         });
 
-        loadNutritionDiary();
+        this.loadSavedMeals();
         this.loadMealTemplates();
     },
 
@@ -3590,12 +3595,74 @@ const foodSearch = {
                 alert(`Meal saved! ${this.items.length} food item(s).`);
             }
             this.closeMealBuilder();
-            loadNutritionDiary();
+            this.loadSavedMeals();
             if (typeof today !== 'undefined') today.loadToday();
         } catch (error) {
             console.error('Error saving meal:', error);
             alert('Failed to save meal');
         }
+    },
+
+    /**
+     * Load saved meals from GET /meals and render them, most recent first
+     */
+    async loadSavedMeals() {
+        const listEl = document.getElementById('saved-meals-list');
+        if (!listEl) return;
+
+        try {
+            const meals = await api.get('/meals');
+            this.renderSavedMeals(meals);
+        } catch (error) {
+            console.error('Error loading saved meals:', error);
+        }
+    },
+
+    /**
+     * Render the saved meals list
+     */
+    renderSavedMeals(meals) {
+        const listEl = document.getElementById('saved-meals-list');
+        if (!listEl) return;
+
+        if (!meals || meals.length === 0) {
+            listEl.className = 'empty-state';
+            listEl.innerHTML = 'No meals logged yet.';
+            return;
+        }
+
+        listEl.className = '';
+
+        // Group into day sections (mirrors the workout list's month grouping).
+        // meals is already sorted by meal_date desc (then created_at desc) by
+        // the backend, so days come out in order just by walking the list.
+        const days = [];
+        let currentDay = null;
+        meals.forEach((meal) => {
+            if (!currentDay || currentDay.date !== meal.meal_date) {
+                currentDay = { date: meal.meal_date, meals: [] };
+                days.push(currentDay);
+            }
+            currentDay.meals.push(meal);
+        });
+
+        listEl.innerHTML = days.map((day) => `
+            <div class="history-month-header">${this.formatDate(day.date)}</div>
+            ${day.meals.map((meal) => `
+                <div class="history-card" onclick="foodSearch.showHistoryDetail(${meal.id})">
+                    <div class="history-card-header">
+                        <span class="history-card-name">${this.escapeHtml(meal.name)}</span>
+                        <button class="history-menu-btn" onclick="event.stopPropagation(); foodSearch.showMealMenu(${meal.id}, event)">☰</button>
+                    </div>
+                    <div style="font-size: 0.85rem; color: #666; margin-bottom: 0.5rem;">
+                        ${meal.items.map((item) => this.escapeHtml(item.name)).join(', ')}
+                    </div>
+                    <div style="font-size: 0.85rem; font-weight: bold;">
+                        ${Math.round(meal.total_calories)} kcal · ${meal.total_protein_g.toFixed(1)}g P · ${meal.total_carbs_g.toFixed(1)}g C · ${meal.total_fat_g.toFixed(1)}g F
+                    </div>
+                </div>
+            `).join('')}
+        `).join('');
     },
 
     /**
@@ -4179,7 +4246,7 @@ const foodSearch = {
 
         try {
             await api.delete(`/meals/${mealId}`);
-            loadNutritionDiary();
+            this.loadSavedMeals();
             if (typeof today !== 'undefined') today.loadToday();
         } catch (error) {
             console.error('Error deleting meal:', error);
@@ -5020,47 +5087,28 @@ const progress = {
 
 window.progress = progress;
 
-window.loadNutritionDiary = loadNutritionDiary;
 
 
-// ========== Nutrition Diary (grouped by day) — this IS the saved meals view ==========
-
-/**
- * Load meals grouped by day from GET /nutrition/by-day and render them as
- * collapsible day cards, most recent day first. Replaces the old flat
- * saved-meals list.
- */
+// ========== Nutrition Diary (grouped by day) ==========
 async function loadNutritionDiary() {
-    const container = document.getElementById('diary-list');
-    if (!container) return;
-
     try {
         const days = await api.get('/nutrition/by-day');
         renderNutritionDiary(days);
     } catch (error) {
         console.error('Error loading nutrition diary:', error);
-        container.className = 'empty-state';
-        container.innerHTML = 'Failed to load nutrition diary. Please try again.';
+        document.getElementById('diary-list').innerHTML = '<div class="empty-state">Failed to load nutrition diary. Please try again.</div>';
     }
 }
 
 function renderNutritionDiary(days) {
     const container = document.getElementById('diary-list');
-    if (!container) return;
-
+    
     if (!days || days.length === 0) {
-        container.className = 'empty-state';
-        container.innerHTML = 'No meals logged yet.';
+        container.innerHTML = '<div class="empty-state">No meals logged yet.</div>';
         return;
     }
 
-    container.className = '';
     container.innerHTML = days.map(day => createDayCard(day)).join('');
-}
-
-// One decimal place everywhere, per SPEC: "1843.0 kcal", "142.5 g protein"
-function formatMacro(value) {
-    return (value || 0).toFixed(1);
 }
 
 function createDayCard(day) {
@@ -5068,18 +5116,19 @@ function createDayCard(day) {
     const formattedDate = dateObj.toLocaleDateString('en-GB', {
         weekday: 'short',
         day: 'numeric',
-        month: 'short',
-        timeZone: 'UTC'
-    });
+        month: 'short'
+    }).replace(/, /, ', ');
 
+    const totals = day.daily_totals;
+    
     return `
         <div class="day-card" data-date="${day.date}">
             <div class="day-card-header">
                 <span class="day-card-date">${formattedDate}</span>
                 <span class="day-card-toggle">▼</span>
             </div>
-            ${createDayTotals(day.daily_totals)}
             <div class="day-card-body">
+                ${createDayTotals(totals)}
                 <div class="day-card-meals">
                     ${day.meals.map(meal => createMealCard(meal)).join('')}
                 </div>
@@ -5092,43 +5141,43 @@ function createDayTotals(totals) {
     return `
         <div class="day-card-macros">
             <div class="day-card-macro">
-                <span class="day-card-macro-label">Cal</span>
-                <span class="day-card-macro-value">${formatMacro(totals.calories)} kcal</span>
+                <span class="day-card-macro-label">Cal:</span>
+                <span class="day-card-macro-value">${Math.round(totals.calories)}</span>
             </div>
             <div class="day-card-macro">
-                <span class="day-card-macro-label">P</span>
-                <span class="day-card-macro-value">${formatMacro(totals.protein_g)}g</span>
+                <span class="day-card-macro-label">P:</span>
+                <span class="day-card-macro-value">${totals.protein_g}g</span>
             </div>
             <div class="day-card-macro">
-                <span class="day-card-macro-label">C</span>
-                <span class="day-card-macro-value">${formatMacro(totals.carbs_g)}g</span>
+                <span class="day-card-macro-label">C:</span>
+                <span class="day-card-macro-value">${totals.carbs_g}g</span>
             </div>
             <div class="day-card-macro">
-                <span class="day-card-macro-label">F</span>
-                <span class="day-card-macro-value">${formatMacro(totals.fat_g)}g</span>
+                <span class="day-card-macro-label">F:</span>
+                <span class="day-card-macro-value">${totals.fat_g}g</span>
             </div>
         </div>
     `;
 }
 
 function createMealCard(meal) {
-    const itemsHtml = meal.items.length > 0
-        ? meal.items.map(item => `
-            <div class="day-card-food">
-                ${escapeHtml(item.name)}
-                <span class="day-card-food-grams">${item.grams}g</span>
-            </div>
-        `).join('')
-        : '<p style="color: #999; font-size: 0.85rem;">No food items.</p>';
+    const itemsHtml = meal.items.map(item => `
+        <div class="day-card-food">
+            ${escapeHtml(item.name)}
+            <span class="day-card-food-grams">${item.grams}g</span>
+        </div>
+    `).join('');
 
     return `
         <div class="day-card-meal">
             <div class="day-card-meal-header">
                 <span class="day-card-meal-name">${escapeHtml(meal.name)}</span>
-                <button class="history-menu-btn" onclick="event.stopPropagation(); foodSearch.showMealMenu(${meal.id}, event)">☰</button>
-            </div>
-            <div class="day-card-meal-macros">
-                ${formatMacro(meal.total_calories)} kcal · ${formatMacro(meal.total_protein_g)}g P · ${formatMacro(meal.total_carbs_g)}g C · ${formatMacro(meal.total_fat_g)}g F
+                <span class="day-card-meal-macros">
+                    ${Math.round(meal.total_calories)} cal • 
+                    ${meal.total_protein_g}g P • 
+                    ${meal.total_carbs_g}g C • 
+                    ${meal.total_fat_g}g F
+                </span>
             </div>
             ${itemsHtml}
         </div>
