@@ -1254,6 +1254,91 @@ async def get_meals():
         return result
 
 
+# ========== Nutrition Diary Endpoints ==========
+@app.get("/nutrition/by-day")
+async def get_nutrition_by_day():
+    """
+    Get meals grouped by calendar date, most recent date first.
+    Each day includes its total macros (sum of all meals) and the list of meals
+    with their items and per-meal totals.
+
+    Returns:
+        List[Dict]: Days with date, daily_totals, and meals list
+    """
+    with get_session() as session:
+        # Get all meals ordered by date (most recent first), then by created_at
+        meals = session.query(Meal).order_by(
+            Meal.meal_date.desc(), 
+            Meal.created_at.desc()
+        ).all()
+
+        # Group meals by date
+        days_dict = {}
+        for db_meal in meals:
+            meal_date_str = db_meal.meal_date.isoformat()
+            
+            if meal_date_str not in days_dict:
+                days_dict[meal_date_str] = {
+                    "date": meal_date_str,
+                    "meals": [],
+                    "daily_totals": {
+                        "calories": 0,
+                        "protein_g": 0,
+                        "carbs_g": 0,
+                        "fat_g": 0
+                    }
+                }
+
+            # Get items for this meal
+            items = session.query(FoodItemModel).filter(
+                FoodItemModel.meal_id == db_meal.id
+            ).all()
+
+            # Calculate per-meal totals
+            meal_calories = sum(i.calories or 0 for i in items)
+            meal_protein_g = sum(i.protein_g or 0 for i in items)
+            meal_carbs_g = sum(i.carbs_g or 0 for i in items)
+            meal_fat_g = sum(i.fat_g or 0 for i in items)
+
+            # Build meal response
+            meal_response = {
+                "id": db_meal.id,
+                "name": db_meal.name or "Meal",
+                "meal_date": db_meal.meal_date.isoformat(),
+                "items": [
+                    {
+                        "id": item.id,
+                        "fdc_id": item.fdc_id,
+                        "name": item.name,
+                        "grams": item.quantity,
+                        "calories": item.calories,
+                        "protein_g": item.protein_g,
+                        "carbs_g": item.carbs_g,
+                        "fat_g": item.fat_g,
+                        "source": item.source,
+                        "serving_label": item.serving_label,
+                        "serving_count": item.serving_count,
+                    }
+                    for item in items
+                ],
+                "total_calories": meal_calories,
+                "total_protein_g": meal_protein_g,
+                "total_carbs_g": meal_carbs_g,
+                "total_fat_g": meal_fat_g
+            }
+
+            days_dict[meal_date_str]["meals"].append(meal_response)
+
+            # Update daily totals
+            days_dict[meal_date_str]["daily_totals"]["calories"] += meal_calories
+            days_dict[meal_date_str]["daily_totals"]["protein_g"] += meal_protein_g
+            days_dict[meal_date_str]["daily_totals"]["carbs_g"] += meal_carbs_g
+            days_dict[meal_date_str]["daily_totals"]["fat_g"] += meal_fat_g
+
+        # Convert to list and return (days are already sorted by date DESC)
+        return list(days_dict.values())
+
+
 # ========== Meal Detail Endpoints ==========
 @app.get("/meals/{meal_id}", response_model=MealResponse)
 async def get_meal(meal_id: int):

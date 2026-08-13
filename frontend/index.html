@@ -729,6 +729,28 @@
         .checkin-delta-up {
             color: #dc3545;
         }
+
+        /* Diary - Collapsible Day Cards */
+        .day-card { background: white; border-radius: 12px; padding: 0; margin-bottom: 0.75rem; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden; }
+        .day-card-header { padding: 1rem; cursor: pointer; display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; }
+        .day-card-header:hover { background: #e9ecef; }
+        .day-card-date { font-weight: bold; color: #1a1a2e; font-size: 1.1rem; }
+        .day-card-toggle { font-size: 1.2rem; color: #666; transition: transform 0.3s; }
+        .day-card.expanded .day-card-toggle { transform: rotate(180deg); }
+        .day-card-macros { display: flex; gap: 1rem; margin-top: 0.5rem; }
+        .day-card-macro { display: flex; align-items: center; gap: 0.25rem; font-size: 0.85rem; }
+        .day-card-macro-label { color: #666; }
+        .day-card-macro-value { font-weight: bold; color: #1a1a2e; }
+        .day-card-body { padding: 0; max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out, padding 0.3s; }
+        .day-card.expanded .day-card-body { max-height: 5000px; padding: 1rem; }
+        .day-card-meal { background: #f8f9fa; border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem; }
+        .day-card-meal:last-child { margin-bottom: 0; }
+        .day-card-meal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem; }
+        .day-card-meal-name { font-weight: bold; color: #1a1a2e; }
+        .day-card-meal-macros { font-size: 0.85rem; color: #666; margin-bottom: 0.6rem; padding-bottom: 0.6rem; border-bottom: 1px solid #eee; }
+        .day-card-food { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.9rem; color: #555; margin-bottom: 0.25rem; }
+        .day-card-food:last-child { margin-bottom: 0; }
+        .day-card-food-grams { color: #888; flex-shrink: 0; }
     </style>
 </head>
 <body>
@@ -739,7 +761,7 @@
         
         <nav class="tabs">
             <div class="tab active" data-tab="today">Today</div>
-            <div class="tab" data-tab="food">Food</div>
+            <div class="tab" data-tab="food" id="food-tab">Food</div>
             <div class="tab" data-tab="workout">Workout</div>
             <div class="tab" data-tab="checkin">Check-in</div>
             <div class="tab" data-tab="progress">Progress</div>
@@ -889,13 +911,11 @@
                 </div>
 
                 <div class="card">
-                    <h3>Saved Meals</h3>
-                    <div id="saved-meals-list" class="empty-state">
-                        No meals logged yet.
-                    </div>
+                    <h3>Nutrition Diary</h3>
+                    <div id="diary-list" class="empty-state">No meals logged yet.</div>
                 </div>
             </div>
-            
+
             <!-- Workout Tab -->
             <div id="workout" class="tab-content">
                 <h2 style="margin-bottom: 1rem;">Workout Log</h2>
