@@ -186,6 +186,29 @@ const timer = {
     }
 };
 
+/**
+ * Local "now" formatted for an <input type="datetime-local"> value
+ * ("YYYY-MM-DDTHH:MM"), i.e. wall-clock time, not UTC.
+ */
+function nowForDatetimeInput() {
+    const now = new Date();
+    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16);
+}
+
+/**
+ * Convert a stored meal_time ISO string (naive local wall-clock datetime,
+ * as saved by the backend - see _parse_meal_time in main.py) into the
+ * "YYYY-MM-DDTHH:MM" format <input type="datetime-local"> expects.
+ */
+function mealTimeForDatetimeInput(isoString) {
+    if (!isoString) return nowForDatetimeInput();
+    // A bare date ("YYYY-MM-DD", e.g. from a meal saved before meal_time
+    // existed) isn't a valid datetime-local value on its own - pin it to
+    // midnight so the field still shows something editable.
+    return isoString.length <= 10 ? `${isoString}T00:00` : isoString.slice(0, 16);
+}
+
 // Active workout state
 let activeWorkout = null;
 let activeMeal = null; // { id, isPastEdit } while editing a past meal in the meal builder
@@ -2421,12 +2444,8 @@ const foodSearch = {
         const saveBtn = document.getElementById('save-search-meal-btn');
         if (saveBtn) saveBtn.textContent = 'Save Meal';
 
-        const dateInput = document.getElementById('meal-date-input');
-        if (dateInput) {
-            const today = new Date();
-            const localDate = new Date(today.getTime() - today.getTimezoneOffset() * 60000);
-            dateInput.value = localDate.toISOString().slice(0, 10);
-        }
+        const dateInput = document.getElementById('meal-datetime-input');
+        if (dateInput) dateInput.value = nowForDatetimeInput();
 
         const nameInput = document.getElementById('meal-name-input');
         if (nameInput) nameInput.value = '';
@@ -3559,11 +3578,11 @@ const foodSearch = {
         }
 
         const nameInput = document.getElementById('meal-name-input');
-        const dateInput = document.getElementById('meal-date-input');
+        const dateInput = document.getElementById('meal-datetime-input');
 
         const payload = {
             name: nameInput ? (nameInput.value.trim() || undefined) : undefined,
-            meal_date: dateInput ? (dateInput.value || undefined) : undefined,
+            meal_time: dateInput ? (dateInput.value || undefined) : undefined,
             items: this.items.map((item) => {
                 const macros = this.computeMacros(item);
                 return {
@@ -3794,12 +3813,8 @@ const foodSearch = {
         const saveBtn = document.getElementById('save-search-meal-btn');
         if (saveBtn) saveBtn.textContent = 'Save Meal';
 
-        const dateInput = document.getElementById('meal-date-input');
-        if (dateInput) {
-            const today = new Date();
-            const localDate = new Date(today.getTime() - today.getTimezoneOffset() * 60000);
-            dateInput.value = localDate.toISOString().slice(0, 10);
-        }
+        const dateInput = document.getElementById('meal-datetime-input');
+        if (dateInput) dateInput.value = nowForDatetimeInput();
 
         const nameInput = document.getElementById('meal-name-input');
         if (nameInput) nameInput.value = template.name;
@@ -4088,10 +4103,10 @@ const foodSearch = {
             const saveBtn = document.getElementById('save-search-meal-btn');
             if (saveBtn) saveBtn.textContent = 'Save';
 
-            // Set the meal date input to the meal's date (parsed as local
-            // calendar components, same reasoning as formatDate())
-            const dateInput = document.getElementById('meal-date-input');
-            if (dateInput) dateInput.value = meal.meal_date;
+            // Set the meal date/time input to the meal's own saved time (or
+            // its date at midnight, for meals saved before meal_time existed)
+            const dateInput = document.getElementById('meal-datetime-input');
+            if (dateInput) dateInput.value = mealTimeForDatetimeInput(meal.meal_time || meal.meal_date);
 
             // Set the meal name field to the meal's existing name, verbatim
             const nameInput = document.getElementById('meal-name-input');
@@ -4148,13 +4163,9 @@ const foodSearch = {
             const saveBtn = document.getElementById('save-search-meal-btn');
             if (saveBtn) saveBtn.textContent = 'Save Meal';
 
-            // Date defaults to today, not the original meal's date
-            const dateInput = document.getElementById('meal-date-input');
-            if (dateInput) {
-                const today = new Date();
-                const localDate = new Date(today.getTime() - today.getTimezoneOffset() * 60000);
-                dateInput.value = localDate.toISOString().slice(0, 10);
-            }
+            // Date/time defaults to now, not the original meal's date/time
+            const dateInput = document.getElementById('meal-datetime-input');
+            if (dateInput) dateInput.value = nowForDatetimeInput();
 
             // Carry over the meal name from the original, verbatim
             const nameInput = document.getElementById('meal-name-input');
@@ -5121,10 +5132,24 @@ function createMealCard(meal) {
         `).join('')
         : '<p style="color: #999; font-size: 0.85rem;">No food items.</p>';
 
+    // meal_time is a naive local wall-clock datetime ("YYYY-MM-DDTHH:MM...") -
+    // read its hour/minute directly rather than via `new Date(...)`, which
+    // would reinterpret it as UTC and shift the displayed time.
+    let timeLabel = '';
+    if (meal.meal_time) {
+        const match = meal.meal_time.match(/T(\d{2}):(\d{2})/);
+        if (match) {
+            const hour = parseInt(match[1], 10);
+            const period = hour >= 12 ? 'PM' : 'AM';
+            const hour12 = ((hour + 11) % 12) + 1;
+            timeLabel = `${hour12}:${match[2]} ${period}`;
+        }
+    }
+
     return `
         <div class="day-card-meal">
             <div class="day-card-meal-header">
-                <span class="day-card-meal-name">${escapeHtml(meal.name)}</span>
+                <span class="day-card-meal-name">${escapeHtml(meal.name)}${timeLabel ? ` <span class="day-card-meal-time" style="font-weight: normal; color: #888; font-size: 0.8rem;">${timeLabel}</span>` : ''}</span>
                 <button class="history-menu-btn" onclick="event.stopPropagation(); foodSearch.showMealMenu(${meal.id}, event)">☰</button>
             </div>
             <div class="day-card-meal-macros">
