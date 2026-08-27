@@ -1090,8 +1090,18 @@ class MealFoodItemCreate(BaseModel):
 class MealCreate(BaseModel):
     """Request model for saving a meal with its food items."""
     name: Optional[str] = None
-    meal_date: Optional[str] = None  # ISO date string (YYYY-MM-DD); defaults to today
+    meal_date: Optional[str] = None  # ISO date string (YYYY-MM-DD); defaults to today. Ignored if meal_time is given.
+    meal_time: Optional[str] = None  # ISO datetime string (e.g. "2026-08-15T19:30"); defaults to now. Its date also becomes meal_date, so the two never disagree.
     items: List[MealFoodItemCreate]
+
+
+def _parse_meal_time(value: str) -> datetime:
+    """Parse a meal_time ISO datetime string (e.g. from an HTML datetime-local
+    input), raising a 400 on malformed input rather than a raw ValueError."""
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="meal_time must be an ISO datetime, e.g. 2026-08-15T19:30")
 
 
 class MealFoodItemResponse(BaseModel):
@@ -1114,6 +1124,7 @@ class MealResponse(BaseModel):
     id: int
     name: str
     meal_date: str
+    meal_time: Optional[str] = None
     items: List[MealFoodItemResponse]
     total_calories: float
     total_protein_g: float
@@ -1142,7 +1153,11 @@ async def create_meal(meal: MealCreate):
 
     with get_session() as session:
         meal_kwargs = {"name": meal.name or "Meal"}
-        if meal.meal_date:
+        if meal.meal_time:
+            parsed_time = _parse_meal_time(meal.meal_time)
+            meal_kwargs["meal_time"] = parsed_time
+            meal_kwargs["meal_date"] = parsed_time.date()
+        elif meal.meal_date:
             try:
                 meal_kwargs["meal_date"] = date.fromisoformat(meal.meal_date)
             except ValueError:
@@ -1195,6 +1210,7 @@ async def create_meal(meal: MealCreate):
             id=db_meal.id,
             name=db_meal.name,
             meal_date=db_meal.meal_date.isoformat(),
+            meal_time=db_meal.meal_time.isoformat() if db_meal.meal_time else None,
             items=items_response,
             total_calories=total_calories,
             total_protein_g=total_protein_g,
@@ -1244,6 +1260,7 @@ async def get_meals():
                 id=db_meal.id,
                 name=db_meal.name,
                 meal_date=db_meal.meal_date.isoformat(),
+                meal_time=db_meal.meal_time.isoformat() if db_meal.meal_time else None,
                 items=items_response,
                 total_calories=sum(i.calories or 0 for i in items),
                 total_protein_g=sum(i.protein_g or 0 for i in items),
@@ -1305,6 +1322,7 @@ async def get_nutrition_by_day():
                 "id": db_meal.id,
                 "name": db_meal.name or "Meal",
                 "meal_date": db_meal.meal_date.isoformat(),
+                "meal_time": db_meal.meal_time.isoformat() if db_meal.meal_time else None,
                 "items": [
                     {
                         "id": item.id,
@@ -1381,6 +1399,7 @@ async def get_meal(meal_id: int):
             id=db_meal.id,
             name=db_meal.name,
             meal_date=db_meal.meal_date.isoformat(),
+            meal_time=db_meal.meal_time.isoformat() if db_meal.meal_time else None,
             items=items_response,
             total_calories=sum(i.calories or 0 for i in items),
             total_protein_g=sum(i.protein_g or 0 for i in items),
@@ -1406,10 +1425,14 @@ async def update_meal(meal_id: int, meal_update: MealCreate):
         if not db_meal:
             raise HTTPException(status_code=404, detail="Meal not found")
 
-        # Update meal name/date if provided
+        # Update meal name/date/time if provided
         if meal_update.name is not None:
             db_meal.name = meal_update.name
-        if meal_update.meal_date:
+        if meal_update.meal_time:
+            parsed_time = _parse_meal_time(meal_update.meal_time)
+            db_meal.meal_time = parsed_time
+            db_meal.meal_date = parsed_time.date()
+        elif meal_update.meal_date:
             try:
                 db_meal.meal_date = date.fromisoformat(meal_update.meal_date)
             except ValueError:
@@ -1494,6 +1517,7 @@ async def update_meal(meal_id: int, meal_update: MealCreate):
             id=db_meal.id,
             name=db_meal.name,
             meal_date=db_meal.meal_date.isoformat(),
+            meal_time=db_meal.meal_time.isoformat() if db_meal.meal_time else None,
             items=items_response,
             total_calories=sum(i.calories or 0 for i in items),
             total_protein_g=sum(i.protein_g or 0 for i in items),
