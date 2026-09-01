@@ -335,3 +335,19 @@ class DailyEvaluation(SQLModel, table=True):
     total_habits: Optional[int] = Field(default=None, description="Total number of habits tracked")
     notes: Optional[str] = Field(default=None, description="Notes about the day")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
+
+
+class DailySkippedDay(SQLModel, table=True):
+    """
+    Model for tracking days the user deliberately did not track food.
+
+    A skipped day is treated as "no data" everywhere it matters: its meals
+    (if any) don't count toward daily totals, and it is left out of the
+    Progress charts entirely rather than being drawn as a zero-calorie day.
+    One row per calendar date (skip_date is unique).
+    """
+    __tablename__ = "daily_skipped_days"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    skip_date: date = Field(..., unique=True, index=True, description="Calendar date that was skipped")
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
