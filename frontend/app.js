@@ -4628,24 +4628,61 @@ const today = {
         const cancelBtn = document.getElementById('cancel-goal-btn');
         if (cancelBtn) cancelBtn.addEventListener('click', () => this.closeGoalForm());
 
+        const skipTodayBtn = document.getElementById('skip-today-btn');
+        if (skipTodayBtn) {
+            skipTodayBtn.addEventListener('click', () => {
+                // Button doubles as skip / un-skip depending on today's state
+                if (this.isDateSkipped(this.todayString())) {
+                    this.unskipDate(this.todayString());
+                } else {
+                    this.skipDate(this.todayString());
+                }
+            });
+        }
+
+        const skipDateInput = document.getElementById('skip-date-input');
+        const skipDateBtn = document.getElementById('skip-date-btn');
+        if (skipDateInput) {
+            skipDateInput.max = this.todayString();
+            skipDateInput.value = this.todayString();
+        }
+        if (skipDateBtn) {
+            skipDateBtn.addEventListener('click', () => {
+                const val = skipDateInput ? skipDateInput.value : '';
+                if (!val) {
+                    alert('Pick a date first.');
+                    return;
+                }
+                this.skipDate(val);
+            });
+        }
+
         this.loadToday();
     },
 
+    /** The set of skipped dates (YYYY-MM-DD) from the last render, for toggle logic */
+    skippedDates: [],
+
+    isDateSkipped(dateStr) {
+        return this.skippedDates.includes(dateStr);
+    },
+
     /**
-     * Load the active goal, all meals, and all workouts, then compute and
+     * Load the active goal, all meals, skipped days, and workouts, then compute and
      * render today's/this week's totals against the goal. Reuses the
      * existing GET /meals and GET /workouts endpoints and filters
      * client-side rather than adding a dedicated backend aggregation route.
      */
     async loadToday() {
         try {
-            const [goal, meals, workouts] = await Promise.all([
+            const [goal, meals, skippedDays, workouts] = await Promise.all([
                 api.get('/goal'),
                 api.get('/meals'),
+                api.get('/skipped-days').catch(() => []),
                 api.get('/workouts'),
             ]);
             this.currentGoal = goal;
-            this.render(goal, meals, workouts);
+            this.render(goal, meals, skippedDays, workouts);
         } catch (error) {
             console.error('Error loading today overview:', error);
         }
@@ -4672,15 +4709,52 @@ const today = {
         return new Date(now.getFullYear(), now.getMonth(), now.getDate() - diffToMonday);
     },
 
-    render(goal, meals, workouts) {
+    render(goal, meals, skippedDays, workouts) {
         const todayStr = this.todayString();
+
+        // --- Skipped days ---
+        // A skipped day is treated as "no data": its meals don't count toward
+        // today's totals and it is left out of the Progress charts.
+        this.skippedDates = (skippedDays || []).map(sd => sd.skip_date);
+        const isTodaySkipped = this.skippedDates.includes(todayStr);
+
+        const skippedMessageEl = document.getElementById('skipped-day-message');
+        const skipTodayBtn = document.getElementById('skip-today-btn');
+        const skippedDaysListEl = document.getElementById('skipped-days-list');
+
+        if (skippedMessageEl) {
+            skippedMessageEl.textContent = isTodaySkipped
+                ? '❌ Today is marked as skipped'
+                : '✅ Food tracking active today';
+        }
+        if (skipTodayBtn) {
+            skipTodayBtn.textContent = isTodaySkipped ? 'Un-skip today' : 'Skip today';
+        }
+
+        // List every skipped day, most recent first, each with an un-skip button
+        if (skippedDaysListEl) {
+            const sorted = [...this.skippedDates].sort().reverse();
+            if (sorted.length === 0) {
+                skippedDaysListEl.innerHTML = '<span style="color: #999;">No skipped days.</span>';
+            } else {
+                skippedDaysListEl.innerHTML = sorted.map(d => `
+                    <span style="display: flex; align-items: center; justify-content: space-between; padding: 0.25rem 0; gap: 0.5rem;">
+                        <span>📅 <strong>${this.formatDate(d)}</strong></span>
+                        <button onclick="today.unskipDate('${d}')" style="
+                            background: none; border: none; cursor: pointer;
+                            color: #dc3545; font-size: 0.8rem; padding: 0.1rem 0.4rem;
+                        ">Un-skip</button>
+                    </span>
+                `).join('');
+            }
+        }
 
         // --- Nutrition: today's meals vs goal ---
         const todaysMeals = (meals || []).filter((m) => m.meal_date === todayStr);
-        const totalCalories = todaysMeals.reduce((sum, m) => sum + (m.total_calories || 0), 0);
-        const totalProtein = todaysMeals.reduce((sum, m) => sum + (m.total_protein_g || 0), 0);
-        const totalCarbs = todaysMeals.reduce((sum, m) => sum + (m.total_carbs_g || 0), 0);
-        const totalFat = todaysMeals.reduce((sum, m) => sum + (m.total_fat_g || 0), 0);
+        const totalCalories = isTodaySkipped ? 0 : todaysMeals.reduce((sum, m) => sum + (m.total_calories || 0), 0);
+        const totalProtein = isTodaySkipped ? 0 : todaysMeals.reduce((sum, m) => sum + (m.total_protein_g || 0), 0);
+        const totalCarbs = isTodaySkipped ? 0 : todaysMeals.reduce((sum, m) => sum + (m.total_carbs_g || 0), 0);
+        const totalFat = isTodaySkipped ? 0 : todaysMeals.reduce((sum, m) => sum + (m.total_fat_g || 0), 0);
 
         document.getElementById('calories-consumed').textContent = Math.round(totalCalories);
         document.getElementById('calories-goal').textContent =
@@ -4816,6 +4890,40 @@ const today = {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    },
+
+    /**
+     * Mark any calendar date (today or in the past) as skipped for food
+     * tracking. Backend is idempotent, so re-skipping a date is harmless.
+     */
+    async skipDate(dateStr) {
+        try {
+            await api.post('/skipped-days', { skip_date: dateStr });
+            this.afterSkipChange();
+        } catch (error) {
+            console.error('Error skipping day:', error);
+            alert('Failed to skip that day. Please try again.');
+        }
+    },
+
+    /** Remove a date from the skipped list (idempotent on the backend). */
+    async unskipDate(dateStr) {
+        try {
+            await api.delete(`/skipped-days/${dateStr}`);
+            this.afterSkipChange();
+        } catch (error) {
+            console.error('Error un-skipping day:', error);
+            alert('Failed to un-skip that day. Please try again.');
+        }
+    },
+
+    /** Refresh every view that treats skipped days as "no data". */
+    afterSkipChange() {
+        this.loadToday();
+        if (typeof loadNutritionDiary === 'function') loadNutritionDiary();
+        if (typeof progress !== 'undefined' && progress.loadCaloriesChart) {
+            progress.loadCaloriesChart();
+        }
     }
 };
 
@@ -4941,14 +5049,20 @@ const progress = {
         if (!container) return;
 
         try {
-            const [meals, goal] = await Promise.all([
+            const [meals, skippedDays, goal] = await Promise.all([
                 api.get('/meals'),
+                api.get('/skipped-days').catch(() => []),
                 api.get('/goal').catch(() => null),
             ]);
 
+            const skippedDates = (skippedDays || []).map(sd => sd.skip_date);
+            
             const byDate = {};
             meals.forEach((m) => {
-                byDate[m.meal_date] = (byDate[m.meal_date] || 0) + m.total_calories;
+                // Skip dates that are marked as skipped days
+                if (!skippedDates.includes(m.meal_date)) {
+                    byDate[m.meal_date] = (byDate[m.meal_date] || 0) + m.total_calories;
+                }
             });
 
             const points = Object.keys(byDate)
@@ -5046,8 +5160,12 @@ async function loadNutritionDiary() {
     if (!container) return;
 
     try {
-        const days = await api.get('/nutrition/by-day');
-        renderNutritionDiary(days);
+        const [days, skippedDays] = await Promise.all([
+            api.get('/nutrition/by-day'),
+            api.get('/skipped-days').catch(() => []),
+        ]);
+        const skippedDates = (skippedDays || []).map(sd => sd.skip_date);
+        renderNutritionDiary(days, skippedDates);
     } catch (error) {
         console.error('Error loading nutrition diary:', error);
         container.className = 'empty-state';
@@ -5055,18 +5173,31 @@ async function loadNutritionDiary() {
     }
 }
 
-function renderNutritionDiary(days) {
+function renderNutritionDiary(days, skippedDates = []) {
     const container = document.getElementById('diary-list');
     if (!container) return;
 
-    if (!days || days.length === 0) {
+    // Dates that were skipped but have no logged meals still deserve a card,
+    // so they can be seen and un-skipped from here.
+    const daysByDate = new Map((days || []).map(d => [d.date, d]));
+    const emptyTotals = { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 };
+    (skippedDates || []).forEach(date => {
+        if (!daysByDate.has(date)) {
+            daysByDate.set(date, { date, meals: [], daily_totals: { ...emptyTotals } });
+        }
+    });
+
+    const allDays = [...daysByDate.values()].sort((a, b) => b.date.localeCompare(a.date));
+
+    if (allDays.length === 0) {
         container.className = 'empty-state';
         container.innerHTML = 'No meals logged yet.';
         return;
     }
 
+    const skippedSet = new Set(skippedDates || []);
     container.className = '';
-    container.innerHTML = days.map(day => createDayCard(day)).join('');
+    container.innerHTML = allDays.map(day => createDayCard(day, skippedSet.has(day.date))).join('');
 }
 
 // One decimal place everywhere, per SPEC: "1843.0 kcal", "142.5 g protein"
@@ -5074,7 +5205,7 @@ function formatMacro(value) {
     return (value || 0).toFixed(1);
 }
 
-function createDayCard(day) {
+function createDayCard(day, isSkipped = false) {
     const dateObj = new Date(day.date + 'T00:00:00Z');
     const formattedDate = dateObj.toLocaleDateString('en-GB', {
         weekday: 'short',
@@ -5083,23 +5214,42 @@ function createDayCard(day) {
         timeZone: 'UTC'
     });
 
+    const skipToggle = isSkipped
+        ? `<button onclick="event.stopPropagation(); today.unskipDate('${day.date}')" style="background:none;border:none;cursor:pointer;color:#dc3545;font-size:0.75rem;padding:0.1rem 0.4rem;">Un-skip</button>`
+        : `<button onclick="event.stopPropagation(); today.skipDate('${day.date}')" style="background:none;border:none;cursor:pointer;color:#6c757d;font-size:0.75rem;padding:0.1rem 0.4rem;">Skip day</button>`;
+
+    const skippedBadge = isSkipped
+        ? ` <span style="font-size:0.7rem;font-weight:600;color:#b02a37;background:#f8d7da;border-radius:4px;padding:0.05rem 0.35rem;">SKIPPED · not counted</span>`
+        : '';
+
     return `
-        <div class="day-card" data-date="${day.date}">
+        <div class="day-card" data-date="${day.date}"${isSkipped ? ' style="opacity:0.6;"' : ''}>
             <div class="day-card-header">
-                <span class="day-card-date">${formattedDate}</span>
-                <span class="day-card-toggle">▼</span>
+                <span class="day-card-date">${formattedDate}${skippedBadge}</span>
+                <span>${skipToggle}<span class="day-card-toggle">▼</span></span>
             </div>
-            ${createDayTotals(day.daily_totals)}
+            ${createDayTotals(day.daily_totals, isSkipped)}
             <div class="day-card-body">
                 <div class="day-card-meals">
-                    ${day.meals.map(meal => createMealCard(meal)).join('')}
+                    ${day.meals.length > 0
+                        ? day.meals.map(meal => createMealCard(meal)).join('')
+                        : '<p style="color:#999;font-size:0.85rem;">No meals logged this day.</p>'}
                 </div>
             </div>
         </div>
     `;
 }
 
-function createDayTotals(totals) {
+function createDayTotals(totals, isSkipped = false) {
+    if (isSkipped) {
+        return `
+        <div class="day-card-macros">
+            <div class="day-card-macro">
+                <span class="day-card-macro-value" style="color:#999;">Not counted (day skipped)</span>
+            </div>
+        </div>
+    `;
+    }
     return `
         <div class="day-card-macros">
             <div class="day-card-macro">

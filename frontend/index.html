@@ -811,6 +811,20 @@
                     </div>
                 </div>
 
+                <div class="card">
+                    <h3>Food Tracking</h3>
+                    <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;">
+                        <span id="skipped-day-message">Food tracking active today</span>
+                        <button id="skip-today-btn" class="btn btn-secondary" style="width: auto; padding: 0.4rem 0.9rem; font-size: 0.85rem; white-space: nowrap;">Skip today</button>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem;">
+                        <label for="skip-date-input" style="font-size: 0.85rem; color: #666;">Mark another day:</label>
+                        <input type="date" id="skip-date-input" style="flex: 1; min-width: 0; padding: 0.35rem 0.5rem; font-size: 0.85rem;">
+                        <button id="skip-date-btn" class="btn btn-secondary" style="width: auto; padding: 0.4rem 0.9rem; font-size: 0.85rem; white-space: nowrap;">Skip</button>
+                    </div>
+                    <div id="skipped-days-list" style="margin-top: 0.75rem; font-size: 0.85rem; max-height: 180px; overflow-y: auto;"></div>
+                </div>
+
                 <!-- Goal summary + edit entry point -->
                 <div class="card" id="goal-display-card">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">

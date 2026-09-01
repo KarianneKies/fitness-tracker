@@ -66,7 +66,7 @@ from sqlalchemy import case, func, or_
 
 from .config import FRONTEND_DIR, PHOTOS_DIR, HAND_MEASUREMENTS
 from .database import create_db_and_tables, get_session
-from .models import Workout, Exercise, CustomExercise, ExerciseSet, Food, UserFood, FoodServing, FoodOverride, Meal, FoodItem as FoodItemModel, MealTemplate, MealTemplateItem, WeeklyCheckin, Goal, KneeExercise
+from .models import Workout, Exercise, CustomExercise, ExerciseSet, Food, UserFood, FoodServing, FoodOverride, Meal, FoodItem as FoodItemModel, MealTemplate, MealTemplateItem, WeeklyCheckin, Goal, KneeExercise, DailySkippedDay
 from .vision import analyze_food_photo as vision_analyze
 from .vision import analyze_nutrition_label as vision_analyze_label
 from .muscle_groups import guess_muscle_group
@@ -2463,6 +2463,106 @@ async def set_goal(goal_update: GoalUpdate):
         session.refresh(goal)
 
         return _goal_to_response(goal)
+
+
+# ========== Skipped Days Models ==========
+class SkippedDayResponse(BaseModel):
+    """Response model for a skipped day."""
+    id: Optional[int]
+    skip_date: str
+    created_at: Optional[str]
+
+
+class SkippedDayCreate(BaseModel):
+    """Request model for creating a skipped day."""
+    skip_date: str  # YYYY-MM-DD format
+
+
+# ========== Skipped Days Endpoints ==========
+@app.get("/skipped-days", response_model=List[SkippedDayResponse])
+async def get_skipped_days():
+    """
+    Get all skipped days.
+
+    Returns:
+        List[SkippedDayResponse]: List of all skipped days
+    """
+    with get_session() as session:
+        skipped_days = session.query(DailySkippedDay).order_by(DailySkippedDay.skip_date.desc()).all()
+        return [
+            SkippedDayResponse(
+                id=s.id,
+                skip_date=s.skip_date.isoformat(),
+                created_at=s.created_at.isoformat() if s.created_at else None
+            )
+            for s in skipped_days
+        ]
+
+
+@app.post("/skipped-days", response_model=SkippedDayResponse)
+async def create_skipped_day(skipped_day: SkippedDayCreate):
+    """
+    Mark a calendar date as skipped for food tracking. The date can be any
+    day - today or one in the past - so a day that was never logged can
+    still be marked "I didn't track this one".
+
+    Idempotent: marking an already-skipped date just returns the existing
+    record (200) rather than erroring, so the UI can treat it as a toggle.
+
+    Args:
+        skipped_day: SkippedDayCreate with the date to skip (YYYY-MM-DD)
+
+    Returns:
+        SkippedDayResponse: The skipped day record (new or pre-existing)
+    """
+    with get_session() as session:
+        try:
+            skip_date = date.fromisoformat(skipped_day.skip_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="skip_date must be YYYY-MM-DD")
+
+        db_skipped_day = session.query(DailySkippedDay).filter(
+            DailySkippedDay.skip_date == skip_date
+        ).first()
+        if db_skipped_day is None:
+            db_skipped_day = DailySkippedDay(skip_date=skip_date)
+            session.add(db_skipped_day)
+            session.commit()
+            session.refresh(db_skipped_day)
+
+        return SkippedDayResponse(
+            id=db_skipped_day.id,
+            skip_date=db_skipped_day.skip_date.isoformat(),
+            created_at=db_skipped_day.created_at.isoformat() if db_skipped_day.created_at else None
+        )
+
+
+@app.delete("/skipped-days/{skip_date}")
+async def delete_skipped_day(skip_date: str):
+    """
+    Remove a day from the skipped days list.
+
+    Args:
+        skip_date: The date to un-skip (YYYY-MM-DD)
+
+    Returns:
+        dict with success message
+    """
+    with get_session() as session:
+        try:
+            skip_date_obj = date.fromisoformat(skip_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="skip_date must be YYYY-MM-DD")
+
+        skipped_day = session.query(DailySkippedDay).filter(
+            DailySkippedDay.skip_date == skip_date_obj
+        ).first()
+        if skipped_day is not None:
+            session.delete(skipped_day)
+            session.commit()
+
+        # Idempotent: un-skipping a date that isn't skipped is a no-op, not an error
+        return {"message": "Skipped day removed successfully"}
 
 
 # Serve saved photos (meal + check-in) - must be mounted before the "/"

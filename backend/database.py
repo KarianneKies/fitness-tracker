@@ -79,6 +79,26 @@ def run_data_migrations() -> None:
         finally:
             conn.close()
 
+    # Create the skipped days table (one row per skipped calendar date)
+    conn = engine.connect()
+    try:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS daily_skipped_days (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                skip_date DATE NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_daily_skipped_days_skip_date "
+            "ON daily_skipped_days (skip_date)"
+        ))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
+
 
 @contextmanager
 def get_session() -> Iterator[Session]:
