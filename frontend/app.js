@@ -373,6 +373,125 @@ function hideExercisePicker() {
     }
 }
 
+// Epley estimated 1RM from a single set; ignores very high-rep sets where
+// the formula falls apart.
+function estOneRepMax(weightKg, reps) {
+    if (!weightKg || !reps || reps > 15) return null;
+    return weightKg * (1 + reps / 30);
+}
+
+/**
+ * Full-screen panel for one exercise: how to perform it (from the vendored
+ * guide dataset, GIF lazy-loaded from a CDN) + every logged session for it
+ * + an estimated-1RM trend. Opened by clicking the exercise name in a
+ * workout. Read-only.
+ */
+window.showExerciseGuide = async function(name) {
+    const existing = document.getElementById('exercise-guide-modal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'exercise-guide-modal';
+    modal.style.cssText = `
+        position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+        display: flex; align-items: flex-end; justify-content: center; z-index: 3000;
+    `;
+    modal.innerHTML = `
+        <div style="background: #fff; border-radius: 12px 12px 0 0; width: 100%; max-width: 480px; max-height: 90vh; display: flex; flex-direction: column;">
+            <div style="padding: 1rem; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
+                <h3 style="margin: 0; font-size: 1rem;">${escapeHtml(name)}</h3>
+                <button onclick="this.closest('#exercise-guide-modal').remove()" style="background: none; border: none; font-size: 1.4rem; cursor: pointer; color: #888; line-height: 1;">&times;</button>
+            </div>
+            <div id="exercise-guide-body" style="padding: 1rem; overflow-y: auto; flex: 1;">
+                <p style="color: #888; text-align: center;">Loading…</p>
+            </div>
+        </div>
+    `;
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+
+    const body = modal.querySelector('#exercise-guide-body');
+    const q = encodeURIComponent(name);
+    let guide, history;
+    try {
+        [guide, history] = await Promise.all([
+            api.get(`/exercises/guide?name=${q}`),
+            api.get(`/exercises/history?name=${q}`),
+        ]);
+    } catch (err) {
+        body.innerHTML = `<p style="color: #dc3545;">${escapeHtml(err.message || 'Failed to load')}</p>`;
+        return;
+    }
+
+    // --- How to perform ---
+    let guideHtml;
+    if (guide && guide.matched) {
+        const muscles = [guide.target, ...(guide.secondary_muscles || [])].filter(Boolean);
+        const chips = [guide.equipment, ...muscles].filter(Boolean).map(m =>
+            `<span style="display: inline-block; background: #f1f1f4; border-radius: 999px; padding: 0.15rem 0.6rem; font-size: 0.75rem; margin: 0 0.25rem 0.25rem 0;">${escapeHtml(m)}</span>`
+        ).join('');
+        guideHtml = `
+            ${guide.gif_url ? `<img src="${guide.gif_url}" alt="${escapeHtml(guide.name)}" loading="lazy" style="width: 100%; max-width: 240px; display: block; margin: 0 auto 0.75rem; border-radius: 8px; background: #fafafa;" onerror="this.style.display='none'">` : ''}
+            <div style="margin-bottom: 0.5rem;">${chips}</div>
+            <ol style="margin: 0 0 0.5rem 1.1rem; padding: 0; font-size: 0.9rem; line-height: 1.5;">
+                ${(guide.steps || []).map(s => `<li style="margin-bottom: 0.35rem;">${escapeHtml(s)}</li>`).join('')}
+            </ol>
+            <p style="font-size: 0.7rem; color: #aaa; margin: 0.25rem 0 0;">
+                Illustration: ${escapeHtml(guide.attribution || '')}${guide.name.toLowerCase() !== name.toLowerCase() ? ` · matched to “${escapeHtml(guide.name)}”` : ''}
+            </p>
+        `;
+    } else {
+        guideHtml = `<p style="color: #888; font-size: 0.9rem;">No technique guide for this exercise name yet. Your history is below.</p>`;
+    }
+
+    // --- Estimated 1RM trend (top set per session) ---
+    const trendPoints = (history || [])
+        .map(h => {
+            let best = null;
+            for (const s of h.sets) {
+                const e = estOneRepMax(s.weight_kg, s.reps);
+                if (e != null && (best == null || e > best)) best = e;
+            }
+            return best == null ? null : { date: h.date, value: Math.round(best) };
+        })
+        .filter(Boolean)
+        .reverse(); // history is newest-first; chart wants oldest-first
+
+    const trendHtml = trendPoints.length >= 2
+        ? `<h4 style="margin: 1rem 0 0.5rem; font-size: 0.85rem; color: #555;">Estimated 1RM</h4>
+           <div style="overflow-x: auto;">${progressLineChartSvg(trendPoints, { unit: ' kg', color: '#e94560' })}</div>`
+        : '';
+
+    // --- Full history ---
+    const historyHtml = (history || []).length === 0
+        ? `<p style="color: #888; font-size: 0.9rem;">Not logged before.</p>`
+        : (history || []).map(h => {
+            const sets = h.sets.length
+                ? h.sets.map(s => {
+                    const w = s.weight_kg != null ? `${s.weight_kg} kg` : (s.hold_seconds != null ? `${s.hold_seconds}s` : '–');
+                    const r = s.reps != null ? ` × ${s.reps}` : '';
+                    return `<span style="display: inline-block; margin: 0 0.5rem 0.2rem 0; font-size: 0.85rem;">${w}${r}${s.to_failure ? ' <span style="color:#e94560;">F</span>' : ''}</span>`;
+                }).join('')
+                : '<span style="color: #aaa; font-size: 0.85rem;">no sets</span>';
+            const est = trendPoints.find(p => p.date === h.date);
+            return `
+                <div style="padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0;">
+                    <div style="font-size: 0.8rem; color: #888;">
+                        ${formatDate(h.date)}${h.workout_name ? ` · ${escapeHtml(h.workout_name)}` : ''}${est ? ` · ~${est.value} kg 1RM` : ''}${h.exercise_name.toLowerCase() !== name.toLowerCase() ? ` · <em>${escapeHtml(h.exercise_name)}</em>` : ''}
+                    </div>
+                    <div style="margin-top: 0.2rem;">${sets}</div>
+                </div>
+            `;
+        }).join('');
+
+    body.innerHTML = `
+        ${guideHtml}
+        ${trendHtml}
+        <h4 style="margin: 1rem 0 0.25rem; font-size: 0.85rem; color: #555;">History (${(history || []).length})</h4>
+        ${historyHtml}
+    `;
+};
+
 // Render exercise list in picker
 function renderExerciseList() {
     const list = document.getElementById('exercise-list');
@@ -608,7 +727,10 @@ async function saveExerciseToBackend(exercise, keepSets = false) {
         <div class="card" data-exercise-id="${exercise.id || 'temp'}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}" data-internal-index="${exIndex}">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                    <strong>${exercise.name}</strong>
+                    <button type="button" onclick="showExerciseGuide('${exercise.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')" title="How to perform + history" style="background: none; border: none; padding: 0; font: inherit; cursor: pointer; text-align: left; color: #1a1a2e;">
+                        <strong>${escapeHtml(exercise.name)}</strong>
+                        <span style="font-size: 0.8rem; color: #888;">&#9432;</span>
+                    </button>
                     ${!exercise.id ? '<span style="font-size: 0.8rem; color: #888;">(unsaved)</span>' : ''}
                 </div>
                 ${isLocked ? '' : `

@@ -28,7 +28,9 @@ fitness-tracker/
 │   ├── vision.py              # LM Studio integration (food photo / label OCR)
 │   ├── muscle_groups.py       # Exercise name -> muscle group mapping
 │   ├── workout_suggestion.py  # "Suggest a workout" logic
-│   └── evaluation.py          # Daily/weekly nutrition + fitness evaluation
+│   ├── evaluation.py          # Daily/weekly nutrition + fitness evaluation
+│   ├── exercise_guide.py      # How-to-perform lookup (matches logged names -> guide dataset)
+│   └── data/exercise_guide.json  # vendored, English-only; GIFs load from a CDN
 ├── frontend/
 │   ├── index.html             # PWA shell with tabs
 │   ├── app.js                 # Frontend logic

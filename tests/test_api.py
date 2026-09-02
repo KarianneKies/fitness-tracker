@@ -194,6 +194,44 @@ def test_exercise_history_endpoints(client):
     client.delete(f"/workouts/{wid}")
 
 
+def test_exercise_guide_match_and_miss(client):
+    r = client.get("/exercises/guide", params={"name": "Romanian Deadlift (Barbell)"})
+    assert r.status_code == 200
+    g = r.json()
+    assert g["matched"] is True
+    assert g["steps"] and isinstance(g["steps"], list)
+    assert g["gif_url"].startswith("https://cdn.jsdelivr.net/")
+    assert g["equipment"]
+
+    r = client.get("/exercises/guide", params={"name": "Totally Made Up Move 9000"})
+    assert r.status_code == 200
+    assert r.json()["matched"] is False
+
+
+def test_exercise_history(client):
+    wid = client.post("/workouts", json={"name": "H"}).json()["id"]
+    client.patch(f"/workouts/{wid}", json={"exercises": [
+        {"name": "Hip Thrust (Barbell)", "order": 0, "sets": [
+            {"order": 0, "reps": 8, "weight_kg": 100.0, "to_failure": False},
+            {"order": 1, "reps": 6, "weight_kg": 110.0, "to_failure": True},
+        ]},
+    ]})
+    client.patch(f"/workouts/{wid}", json={"finished_at": "2026-09-02T10:00:00"})
+
+    # base-name match: query without the "(Barbell)" qualifier
+    r = client.get("/exercises/history", params={"name": "Hip Thrust"})
+    assert r.status_code == 200
+    hist = r.json()
+    assert len(hist) == 1
+    assert hist[0]["workout_id"] == wid
+    assert hist[0]["date"] == "2026-09-02"
+    assert len(hist[0]["sets"]) == 2
+    assert hist[0]["sets"][1]["weight_kg"] == 110.0 and hist[0]["sets"][1]["to_failure"] is True
+
+    assert client.get("/exercises/history", params={"name": "Never Done"}).json() == []
+    client.delete(f"/workouts/{wid}")
+
+
 def test_custom_exercise_idempotent(client):
     a = client.post("/exercises/custom", json={"name": "Sissy Squat"})
     b = client.post("/exercises/custom", json={"name": "sissy squat"})

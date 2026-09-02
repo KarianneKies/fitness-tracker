@@ -10,6 +10,7 @@ from sqlalchemy import func, or_
 from ..database import get_session
 from ..models import Workout, Exercise, ExerciseSet, CustomExercise, KneeExercise
 from ..workout_suggestion import suggest_workout
+from ..exercise_guide import find_guide
 
 router = APIRouter(tags=["exercises"])
 
@@ -143,6 +144,60 @@ def get_exercise_progress(name: str):
                 by_date[date_key] = top_set.weight_kg
 
         return [{"date": d, "weight_kg": w} for d, w in sorted(by_date.items())]
+
+
+@router.get("/exercises/guide")
+def get_exercise_guide(name: str):
+    """
+    How-to-perform guide for an exercise: step-by-step instructions, target
+    muscles, equipment, and a GIF URL (loaded by the client from a CDN).
+    `matched` is False when no dataset entry is a close enough fit.
+    """
+    guide = find_guide(name)
+    return guide or {"matched": False, "name": name}
+
+
+@router.get("/exercises/history")
+def get_exercise_history(name: str):
+    """
+    Every time this exercise was logged, most recent first, matched by base
+    name (equipment qualifiers stripped) so variants combine. Each entry has
+    the workout it belongs to and every set.
+    """
+    target_base = _base_exercise_name(name).strip().lower()
+
+    with get_session() as session:
+        rows = (
+            session.query(Exercise, Workout)
+            .join(Workout, Exercise.workout_id == Workout.id)
+            .order_by(Workout.started_at.desc(), Exercise.id.desc())
+            .all()
+        )
+
+        history = []
+        for exercise, workout in rows:
+            if _base_exercise_name(exercise.name).strip().lower() != target_base:
+                continue
+            sets = session.query(ExerciseSet).filter(
+                ExerciseSet.exercise_id == exercise.id
+            ).order_by(ExerciseSet.order).all()
+            history.append({
+                "workout_id": workout.id,
+                "workout_name": workout.name,
+                "date": workout.started_at.date().isoformat(),
+                "exercise_name": exercise.name,
+                "sets": [
+                    {
+                        "order": s.order,
+                        "reps": s.reps,
+                        "weight_kg": s.weight_kg,
+                        "hold_seconds": s.hold_seconds,
+                        "to_failure": s.to_failure,
+                    }
+                    for s in sets
+                ],
+            })
+        return history
 
 
 @router.get("/exercises/custom")
