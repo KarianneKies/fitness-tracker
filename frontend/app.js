@@ -28,98 +28,82 @@ const camera = {
 };
 
 // API communication
+/**
+ * Error thrown for any non-2xx API response. `.status` is the HTTP status
+ * and `.message` is the backend's `detail` string when there is one, so
+ * callers can show something useful instead of "Network response was not ok".
+ */
+class ApiError extends Error {
+    constructor(message, status) {
+        super(message);
+        this.name = 'ApiError';
+        this.status = status;
+    }
+}
+
 const api = {
-    /**
-     * Base URL for the backend API
-     */
     get baseUrl() {
         return window.location.origin;
     },
-    
-    /**
-     * Generic GET request
-     */
-    async get(path) {
-        try {
-            const response = await fetch(`${this.baseUrl}${path}`);
-            if (!response.ok) throw new Error('Network response was not ok');
-            return await response.json();
-        } catch (error) {
-            console.error('API GET error:', error);
-            throw error;
-        }
-    },
-    
-    /**
-     * Generic POST request
-     */
-    async post(path, data) {
-        try {
-            const response = await fetch(`${this.baseUrl}${path}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-            });
-            if (!response.ok) throw new Error('Network response was not ok');
-            return await response.json();
-        } catch (error) {
-            console.error('API POST error:', error);
-            throw error;
-        }
-    },
-    
-    /**
-     * Generic PATCH request
-     */
-    async patch(path, data) {
-        try {
-            const response = await fetch(`${this.baseUrl}${path}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-            });
-            if (!response.ok) throw new Error('Network response was not ok');
-            return await response.json();
-        } catch (error) {
-            console.error('API PATCH error:', error);
-            throw error;
-        }
-    },
-    
-    /**
-     * Generic PUT request
-     */
-    async put(path, data) {
-        try {
-            const response = await fetch(`${this.baseUrl}${path}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-            });
-            if (!response.ok) throw new Error('Network response was not ok');
-            return await response.json();
-        } catch (error) {
-            console.error('API PUT error:', error);
-            throw error;
-        }
-    },
 
     /**
-     * Generic DELETE request
+     * One request path for every verb. `body` is JSON-encoded when present.
+     * Returns parsed JSON (or null for an empty 204-style body). Throws an
+     * ApiError carrying the backend's `detail` message on any non-2xx.
      */
-    async delete(path) {
-        try {
-            const response = await fetch(`${this.baseUrl}${path}`, {
-                method: 'DELETE'
-            });
-            if (!response.ok) throw new Error('Network response was not ok');
-            return await response.json();
-        } catch (error) {
-            console.error('API DELETE error:', error);
-            throw error;
+    async request(method, path, body) {
+        const opts = { method };
+        if (body !== undefined) {
+            opts.headers = { 'Content-Type': 'application/json' };
+            opts.body = JSON.stringify(body);
         }
-    }
+
+        let response;
+        try {
+            response = await fetch(`${this.baseUrl}${path}`, opts);
+        } catch (networkError) {
+            console.error(`API ${method} ${path} - network error:`, networkError);
+            throw new ApiError('Could not reach the server. Is it running?', 0);
+        }
+
+        const text = await response.text();
+        let payload = null;
+        if (text) {
+            try {
+                payload = JSON.parse(text);
+            } catch {
+                payload = { detail: text.slice(0, 200) };
+            }
+        }
+
+        if (!response.ok) {
+            const message = detailToMessage(payload) || `Request failed (HTTP ${response.status})`;
+            console.error(`API ${method} ${path} -> ${response.status}: ${message}`);
+            throw new ApiError(message, response.status);
+        }
+        return payload;
+    },
+
+    get(path) { return this.request('GET', path); },
+    post(path, data) { return this.request('POST', path, data ?? {}); },
+    patch(path, data) { return this.request('PATCH', path, data ?? {}); },
+    put(path, data) { return this.request('PUT', path, data ?? {}); },
+    delete(path) { return this.request('DELETE', path); },
 };
+
+/** Turn FastAPI's `detail` (string, or a list of validation errors) into one line. */
+function detailToMessage(payload) {
+    if (!payload || payload.detail == null) return null;
+    const d = payload.detail;
+    if (typeof d === 'string') return d;
+    if (Array.isArray(d)) {
+        return d.map(e => {
+            const loc = Array.isArray(e.loc) ? e.loc.filter(x => x !== 'body').join('.') : '';
+            return loc ? `${loc}: ${e.msg}` : e.msg;
+        }).join('; ');
+    }
+    return null;
+}
 
 // Backend timestamps (e.g. Workout.started_at) are naive UTC - Python's
 // datetime.utcnow().isoformat() with no timezone suffix. JS's Date parser

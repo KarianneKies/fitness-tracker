@@ -82,7 +82,7 @@ app = FastAPI(
 
 
 @app.on_event("startup")
-async def on_startup():
+def on_startup():
     """
     Initialize database tables and seed default data on application startup.
     """
@@ -91,11 +91,15 @@ async def on_startup():
         seed_default_knee_exercises(session)
 
 
-# CORS middleware (local development only)
+# CORS. The PWA is served from this same app (StaticFiles at "/") and calls
+# it same-origin, so CORS isn't needed for normal use - this only exists so
+# the API can be poked from a browser devtools console or a separate dev
+# server. `allow_credentials` stays False: with it True the "*" origin is
+# invalid per the CORS spec and browsers reject every response.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict this
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -107,7 +111,7 @@ app.add_middleware(
 # the next occurrence is diagnosable instead of a guess. Safe to remove once
 # that's root-caused - it only logs, it doesn't change any response.
 @app.exception_handler(RequestValidationError)
-async def log_validation_errors(request: Request, exc: RequestValidationError):
+def log_validation_errors(request: Request, exc: RequestValidationError):
     if request.url.path in ("/foods/label-scan", "/meals/photo"):
         content_type = request.headers.get("content-type", "<missing>")
         content_length = request.headers.get("content-length", "<missing>")
@@ -211,7 +215,7 @@ class WorkoutDetailResponse(BaseModel):
 
 # ========== Workout Endpoints ==========
 @app.get("/health")
-async def health_check():
+def health_check():
     """
     Health check endpoint.
     
@@ -222,7 +226,7 @@ async def health_check():
 
 
 @app.post("/workouts", response_model=WorkoutResponse)
-async def start_workout(workout: WorkoutCreate):
+def start_workout(workout: WorkoutCreate):
     """
     Start a new workout.
     
@@ -255,7 +259,7 @@ async def start_workout(workout: WorkoutCreate):
 
 
 @app.get("/workouts", response_model=List[WorkoutResponse])
-async def get_workouts():
+def get_workouts():
     """
     Get all workouts, most recent first.
     
@@ -314,7 +318,7 @@ async def get_workouts():
 
 
 @app.get("/workouts/{workout_id}", response_model=WorkoutDetailResponse)
-async def get_workout(workout_id: int):
+def get_workout(workout_id: int):
     """
     Get one workout with all exercises and sets.
     
@@ -372,7 +376,7 @@ async def get_workout(workout_id: int):
 
 
 @app.patch("/workouts/{workout_id}", response_model=WorkoutDetailResponse)
-async def update_workout(workout_id: int, workout_update: WorkoutUpdate):
+def update_workout(workout_id: int, workout_update: WorkoutUpdate):
     """
     Update a workout.
     
@@ -629,7 +633,7 @@ def _rank_match(description: str, query: str) -> int:
 
 # ========== Food Search Endpoint ==========
 @app.get("/foods/search", response_model=List[FoodSearchResult])
-async def search_foods(q: str):
+def search_foods(q: str):
     """
     Search the local food references (USDA import + user-added products) by
     description.
@@ -766,7 +770,7 @@ async def scan_nutrition_label(photo: UploadFile = File(...)):
 
 
 @app.post("/foods/custom", response_model=FoodSearchResult)
-async def create_custom_food(food: CustomFoodCreate):
+def create_custom_food(food: CustomFoodCreate):
     """
     Save a user-reviewed custom product (e.g. from a nutrition label scan)
     to the local food reference, so it can be found via /foods/search and
@@ -809,7 +813,7 @@ async def create_custom_food(food: CustomFoodCreate):
 
 
 @app.patch("/foods/custom/{food_id}", response_model=FoodSearchResult)
-async def update_custom_food(food_id: int, food: CustomFoodCreate):
+def update_custom_food(food_id: int, food: CustomFoodCreate):
     """
     Update a previously-added custom product (name and/or per-100g macros).
 
@@ -849,7 +853,7 @@ async def update_custom_food(food_id: int, food: CustomFoodCreate):
 
 
 @app.delete("/foods/custom/{food_id}")
-async def delete_custom_food(food_id: int):
+def delete_custom_food(food_id: int):
     """
     Delete a custom product (and any servings defined for it).
 
@@ -875,7 +879,7 @@ async def delete_custom_food(food_id: int):
 
 
 @app.patch("/foods/usda/{food_id}", response_model=FoodSearchResult)
-async def update_usda_food(food_id: int, food: CustomFoodCreate):
+def update_usda_food(food_id: int, food: CustomFoodCreate):
     """
     Save a correction to a USDA food's name/macros.
 
@@ -928,7 +932,7 @@ async def update_usda_food(food_id: int, food: CustomFoodCreate):
 
 
 @app.delete("/foods/usda/{food_id}/override")
-async def reset_usda_food(food_id: int):
+def reset_usda_food(food_id: int):
     """
     Discard a correction and revert a USDA food back to its original
     imported name/macros.
@@ -967,7 +971,7 @@ class FoodServingUpdate(BaseModel):
 
 # ========== Food Serving Endpoints ==========
 @app.post("/foods/servings", response_model=FoodServingResponse)
-async def create_food_serving(serving: FoodServingCreate):
+def create_food_serving(serving: FoodServingCreate):
     """
     Define a custom serving size for a food (e.g. "1 rice cake = 9g"), so
     amounts can be logged as a count of servings instead of grams.
@@ -1001,7 +1005,7 @@ async def create_food_serving(serving: FoodServingCreate):
 
 
 @app.get("/foods/servings", response_model=List[FoodServingResponse])
-async def list_food_servings(food_id: int, food_source: str):
+def list_food_servings(food_id: int, food_source: str):
     """
     List the servings defined for a food.
 
@@ -1020,7 +1024,7 @@ async def list_food_servings(food_id: int, food_source: str):
 
 
 @app.patch("/foods/servings/{serving_id}", response_model=FoodServingResponse)
-async def update_food_serving(serving_id: int, serving: FoodServingUpdate):
+def update_food_serving(serving_id: int, serving: FoodServingUpdate):
     """
     Update a serving's label and/or grams per unit.
 
@@ -1051,7 +1055,7 @@ async def update_food_serving(serving_id: int, serving: FoodServingUpdate):
 
 
 @app.delete("/foods/servings/{serving_id}")
-async def delete_food_serving(serving_id: int):
+def delete_food_serving(serving_id: int):
     """
     Delete a custom serving size.
 
@@ -1134,7 +1138,7 @@ class MealResponse(BaseModel):
 
 # ========== Meal Endpoints ==========
 @app.post("/meals", response_model=MealResponse)
-async def create_meal(meal: MealCreate):
+def create_meal(meal: MealCreate):
     """
     Save a meal with its food items (e.g. from manual food search).
 
@@ -1220,7 +1224,7 @@ async def create_meal(meal: MealCreate):
 
 
 @app.get("/meals", response_model=List[MealResponse])
-async def get_meals():
+def get_meals():
     """
     Get all meals, most recent first (by meal_date, the day the meal is
     actually for - not created_at, which is just when the row was inserted
@@ -1273,7 +1277,7 @@ async def get_meals():
 
 # ========== Nutrition Diary Endpoints ==========
 @app.get("/nutrition/by-day")
-async def get_nutrition_by_day():
+def get_nutrition_by_day():
     """
     Get meals grouped by calendar date, most recent date first.
     Each day includes its total macros (sum of all meals) and the list of meals
@@ -1359,7 +1363,7 @@ async def get_nutrition_by_day():
 
 # ========== Meal Detail Endpoints ==========
 @app.get("/meals/{meal_id}", response_model=MealResponse)
-async def get_meal(meal_id: int):
+def get_meal(meal_id: int):
     """
     Get one meal with all food items and totals.
 
@@ -1409,7 +1413,7 @@ async def get_meal(meal_id: int):
 
 
 @app.patch("/meals/{meal_id}", response_model=MealResponse)
-async def update_meal(meal_id: int, meal_update: MealCreate):
+def update_meal(meal_id: int, meal_update: MealCreate):
     """
     Update a meal (including adding/removing/changing food items).
 
@@ -1527,7 +1531,7 @@ async def update_meal(meal_id: int, meal_update: MealCreate):
 
 
 @app.delete("/meals/{meal_id}")
-async def delete_meal(meal_id: int):
+def delete_meal(meal_id: int):
     """
     Delete a meal and all its food items.
 
@@ -1619,7 +1623,7 @@ def _meal_template_response(template: MealTemplate, items: List[MealTemplateItem
 
 
 @app.post("/meal-templates", response_model=MealTemplateResponse)
-async def create_meal_template(template: MealTemplateCreate):
+def create_meal_template(template: MealTemplateCreate):
     """
     Save a reusable combination of food items as a named template (e.g.
     "Usual Salad Bar Lunch"), so it can be logged again later without
@@ -1667,7 +1671,7 @@ async def create_meal_template(template: MealTemplateCreate):
 
 
 @app.patch("/meal-templates/{template_id}", response_model=MealTemplateResponse)
-async def update_meal_template(template_id: int, template: MealTemplateCreate):
+def update_meal_template(template_id: int, template: MealTemplateCreate):
     """
     Update a meal template's name and items. Replaces all items with the
     given list - simplest correct approach, since template items aren't
@@ -1724,7 +1728,7 @@ async def update_meal_template(template_id: int, template: MealTemplateCreate):
 
 
 @app.get("/meal-templates", response_model=List[MealTemplateResponse])
-async def list_meal_templates():
+def list_meal_templates():
     """
     List all saved meal templates with their items and totals, alphabetically
     by name.
@@ -1746,7 +1750,7 @@ async def list_meal_templates():
 
 
 @app.delete("/meal-templates/{template_id}")
-async def delete_meal_template(template_id: int):
+def delete_meal_template(template_id: int):
     """
     Delete a meal template and its items.
 
@@ -1771,7 +1775,7 @@ async def delete_meal_template(template_id: int):
 
 
 @app.delete("/workouts/{workout_id}")
-async def delete_workout(workout_id: int):
+def delete_workout(workout_id: int):
     """
     Delete a workout and all its exercises/sets.
     
@@ -1806,7 +1810,7 @@ async def delete_workout(workout_id: int):
 
 
 @app.delete("/workouts/{workout_id}/exercises/{exercise_id}")
-async def delete_exercise(workout_id: int, exercise_id: int):
+def delete_exercise(workout_id: int, exercise_id: int):
     """
     Remove a single exercise (and its sets) from a workout, identified by its unique id.
 
@@ -1850,7 +1854,7 @@ def _base_exercise_name(name: str) -> str:
 
 
 @app.get("/exercises/logged")
-async def list_logged_exercises():
+def list_logged_exercises():
     """
     List exercises that have actually been logged in a workout, merged by
     base name (stripping equipment qualifiers like "(Barbell)") so history
@@ -1883,7 +1887,7 @@ async def list_logged_exercises():
 
 
 @app.get("/exercises/names")
-async def list_exercise_names():
+def list_exercise_names():
     """
     List the distinct exercise names already used across all logged workouts
     (e.g. from imported history), sorted alphabetically. Read-only - does not
@@ -1898,7 +1902,7 @@ async def list_exercise_names():
 
 
 @app.get("/exercises/previous")
-async def get_previous_exercise_sets(name: str, exclude_workout_id: Optional[int] = None):
+def get_previous_exercise_sets(name: str, exclude_workout_id: Optional[int] = None):
     """
     Get the sets logged for an exercise the last time it was done, so the picker
     can show "Previous" reference values. Read-only - does not change how
@@ -1950,7 +1954,7 @@ async def get_previous_exercise_sets(name: str, exclude_workout_id: Optional[int
 
 
 @app.get("/exercises/progress")
-async def get_exercise_progress(name: str):
+def get_exercise_progress(name: str):
     """
     Get the top set weight per day for an exercise, in date order, for the
     Progress tab's strength trend chart. Matches by base name (stripping
@@ -1991,7 +1995,7 @@ async def get_exercise_progress(name: str):
 
 
 @app.get("/exercises/custom")
-async def list_custom_exercises():
+def list_custom_exercises():
     """
     List all user-added custom exercise names, most recently added first.
 
@@ -2004,7 +2008,7 @@ async def list_custom_exercises():
 
 
 @app.post("/exercises/custom")
-async def create_custom_exercise(payload: CustomExerciseCreate):
+def create_custom_exercise(payload: CustomExerciseCreate):
     """
     Persist a user-typed exercise name so it appears in the exercise picker
     on future workouts. Idempotent by name (case-insensitive): re-adding an
@@ -2049,7 +2053,7 @@ class KneeExerciseCreate(BaseModel):
 
 
 @app.get("/suggest-workout", response_model=List[SuggestedExerciseResponse])
-async def get_suggested_workout(split: Optional[str] = None):
+def get_suggested_workout(split: Optional[str] = None):
     """
     Propose a workout for the "Recommended Workout" review screen. Every
     proposal is all upper-body or all lower-body, never mixed. On a
@@ -2074,7 +2078,7 @@ async def get_suggested_workout(split: Optional[str] = None):
 
 
 @app.get("/knee-exercises")
-async def list_knee_exercises():
+def list_knee_exercises():
     """
     List the user's knee-strengthening exercise list (editable, seeded with
     physio-given defaults on first run), most recently added first.
@@ -2088,7 +2092,7 @@ async def list_knee_exercises():
 
 
 @app.post("/knee-exercises")
-async def create_knee_exercise(payload: KneeExerciseCreate):
+def create_knee_exercise(payload: KneeExerciseCreate):
     """
     Add an entry to the knee-strengthening list. Idempotent by name
     (case-insensitive): re-adding an existing name returns the existing
@@ -2120,7 +2124,7 @@ async def create_knee_exercise(payload: KneeExerciseCreate):
 
 
 @app.delete("/knee-exercises/{knee_exercise_id}")
-async def delete_knee_exercise(knee_exercise_id: int):
+def delete_knee_exercise(knee_exercise_id: int):
     """
     Remove an entry from the knee-strengthening list.
 
@@ -2240,7 +2244,7 @@ async def create_checkin(
 
 
 @app.get("/checkins", response_model=List[CheckinResponse])
-async def get_checkins():
+def get_checkins():
     """
     Get all weekly check-ins, most recent first.
 
@@ -2255,7 +2259,7 @@ async def get_checkins():
 
 
 @app.get("/checkins/{checkin_id}", response_model=CheckinResponse)
-async def get_checkin(checkin_id: int):
+def get_checkin(checkin_id: int):
     """
     Get one weekly check-in.
 
@@ -2342,7 +2346,7 @@ async def update_checkin(
 
 
 @app.delete("/checkins/{checkin_id}")
-async def delete_checkin(checkin_id: int):
+def delete_checkin(checkin_id: int):
     """
     Delete a weekly check-in and its photo file, if any.
 
@@ -2414,7 +2418,7 @@ def _goal_to_response(goal: Optional[Goal]) -> GoalResponse:
 
 # ========== Goal Endpoints ==========
 @app.get("/goal", response_model=GoalResponse)
-async def get_goal():
+def get_goal():
     """
     Get the active goal, if one has been set.
 
@@ -2427,7 +2431,7 @@ async def get_goal():
 
 
 @app.put("/goal", response_model=GoalResponse)
-async def set_goal(goal_update: GoalUpdate):
+def set_goal(goal_update: GoalUpdate):
     """
     Set or update the active goal. A single-user app, so this replaces
     whatever the current active goal's field values are (existing active
@@ -2480,7 +2484,7 @@ class SkippedDayCreate(BaseModel):
 
 # ========== Skipped Days Endpoints ==========
 @app.get("/skipped-days", response_model=List[SkippedDayResponse])
-async def get_skipped_days():
+def get_skipped_days():
     """
     Get all skipped days.
 
@@ -2500,7 +2504,7 @@ async def get_skipped_days():
 
 
 @app.post("/skipped-days", response_model=SkippedDayResponse)
-async def create_skipped_day(skipped_day: SkippedDayCreate):
+def create_skipped_day(skipped_day: SkippedDayCreate):
     """
     Mark a calendar date as skipped for food tracking. The date can be any
     day - today or one in the past - so a day that was never logged can
@@ -2538,7 +2542,7 @@ async def create_skipped_day(skipped_day: SkippedDayCreate):
 
 
 @app.delete("/skipped-days/{skip_date}")
-async def delete_skipped_day(skip_date: str):
+def delete_skipped_day(skip_date: str):
     """
     Remove a day from the skipped days list.
 
