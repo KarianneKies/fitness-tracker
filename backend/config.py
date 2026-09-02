@@ -19,8 +19,9 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Frontend directory (serves the PWA)
 FRONTEND_DIR: str = os.path.join(PROJECT_ROOT, "frontend")
 
-# Database
-DATABASE_PATH: str = os.path.join(PROJECT_ROOT, "app.db")
+# Database. Override with FITNESS_TRACKER_DB (used by the test suite to
+# point at a throwaway file instead of the real app.db).
+DATABASE_PATH: str = os.environ.get("FITNESS_TRACKER_DB") or os.path.join(PROJECT_ROOT, "app.db")
 
 # File storage paths
 PHOTOS_DIR: str = os.path.join(PROJECT_ROOT, "data", "photos")
