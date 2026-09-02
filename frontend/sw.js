@@ -6,14 +6,17 @@
  * Provides offline capabilities and background sync.
  */
 
-const CACHE_NAME = 'fitness-tracker-v4';
+const CACHE_NAME = 'fitness-tracker-v5';
 
-// Always fetch fresh files in development mode
-// Uncomment the cache logic for production
+// Offline fallback set. The fetch handler is network-first, so these are
+// only used when the network is unavailable; keep the JS module graph
+// (app.js + its imports) listed so the app still loads offline.
 const ASSETS_TO_CACHE = [
     '/',
     '/index.html',
     '/app.js',
+    '/utils.js',
+    '/exercises.js',
     '/manifest.json'
 ];
 

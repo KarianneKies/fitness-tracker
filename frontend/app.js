@@ -9,6 +9,10 @@
 
 // Import exercises list
 import { exercises as exerciseList } from './exercises.js';
+import {
+    api, escapeHtml, parseUtcTimestamp, formatDate, formatShortDate,
+    formatTime, todayString, localDateStr, weekStart,
+} from './utils.js';
 
 // Camera functionality (stub - for future barcode scanning)
 const camera = {
@@ -27,95 +31,9 @@ const camera = {
     }
 };
 
-// API communication
-/**
- * Error thrown for any non-2xx API response. `.status` is the HTTP status
- * and `.message` is the backend's `detail` string when there is one, so
- * callers can show something useful instead of "Network response was not ok".
- */
-class ApiError extends Error {
-    constructor(message, status) {
-        super(message);
-        this.name = 'ApiError';
-        this.status = status;
-    }
-}
-
-const api = {
-    get baseUrl() {
-        return window.location.origin;
-    },
-
-    /**
-     * One request path for every verb. `body` is JSON-encoded when present.
-     * Returns parsed JSON (or null for an empty 204-style body). Throws an
-     * ApiError carrying the backend's `detail` message on any non-2xx.
-     */
-    async request(method, path, body) {
-        const opts = { method };
-        if (body !== undefined) {
-            opts.headers = { 'Content-Type': 'application/json' };
-            opts.body = JSON.stringify(body);
-        }
-
-        let response;
-        try {
-            response = await fetch(`${this.baseUrl}${path}`, opts);
-        } catch (networkError) {
-            console.error(`API ${method} ${path} - network error:`, networkError);
-            throw new ApiError('Could not reach the server. Is it running?', 0);
-        }
-
-        const text = await response.text();
-        let payload = null;
-        if (text) {
-            try {
-                payload = JSON.parse(text);
-            } catch {
-                payload = { detail: text.slice(0, 200) };
-            }
-        }
-
-        if (!response.ok) {
-            const message = detailToMessage(payload) || `Request failed (HTTP ${response.status})`;
-            console.error(`API ${method} ${path} -> ${response.status}: ${message}`);
-            throw new ApiError(message, response.status);
-        }
-        return payload;
-    },
-
-    get(path) { return this.request('GET', path); },
-    post(path, data) { return this.request('POST', path, data ?? {}); },
-    patch(path, data) { return this.request('PATCH', path, data ?? {}); },
-    put(path, data) { return this.request('PUT', path, data ?? {}); },
-    delete(path) { return this.request('DELETE', path); },
-};
-
-/** Turn FastAPI's `detail` (string, or a list of validation errors) into one line. */
-function detailToMessage(payload) {
-    if (!payload || payload.detail == null) return null;
-    const d = payload.detail;
-    if (typeof d === 'string') return d;
-    if (Array.isArray(d)) {
-        return d.map(e => {
-            const loc = Array.isArray(e.loc) ? e.loc.filter(x => x !== 'body').join('.') : '';
-            return loc ? `${loc}: ${e.msg}` : e.msg;
-        }).join('; ');
-    }
-    return null;
-}
-
-// Backend timestamps (e.g. Workout.started_at) are naive UTC - Python's
-// datetime.utcnow().isoformat() with no timezone suffix. JS's Date parser
-// treats a timezone-less "date-time" string as LOCAL time, not UTC, so
-// parsing it directly would silently shift by the local UTC offset (2
-// hours added, for example, in CEST). Appending "Z" forces correct UTC
-// interpretation.
-function parseUtcTimestamp(isoString) {
-    if (!isoString) return null;
-    const hasTz = /[Zz]|[+-]\d{2}:?\d{2}$/.test(isoString);
-    return new Date(hasTz ? isoString : `${isoString}Z`);
-}
+// The API client (`api`), `ApiError`, `parseUtcTimestamp`, `formatTime`,
+// `formatDate`, `formatShortDate`, `escapeHtml` and the today/week date
+// helpers now live in ./utils.js and are imported at the top of this file.
 
 // Timer functionality for active workout.
 //
@@ -314,13 +232,6 @@ function initTabs() {
             }
         });
     });
-}
-
-// Format seconds as mm:ss
-function formatTime(seconds) {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
 // Update timer display
@@ -2601,7 +2512,7 @@ const foodSearch = {
         list.innerHTML = results.map((food, index) => `
             <div class="food-search-result" data-index="${index}" style="padding: 0.75rem; border-bottom: 1px solid #f0f0f0; cursor: pointer;">
                 <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem;">
-                    <div style="font-weight: bold; color: #1a1a2e;">${this.escapeHtml(food.description)}</div>
+                    <div style="font-weight: bold; color: #1a1a2e;">${escapeHtml(food.description)}</div>
                     <div style="flex-shrink: 0; display: flex; align-items: center; gap: 0.4rem;">
                         <span style="font-size: 0.65rem; padding: 0.15rem 0.4rem; border-radius: 4px; color: white; white-space: nowrap; background: ${food.source === 'custom' ? '#e94560' : '#1a1a2e'};">${food.source === 'custom' ? 'YOURS' : 'USDA'}</span>
                         <button type="button" class="edit-custom-food-btn" data-index="${index}" title="Edit this food" style="background: none; border: none; color: #666; cursor: pointer; font-size: 0.9rem; padding: 0;">✎</button>
@@ -2660,7 +2571,7 @@ const foodSearch = {
         amountView.innerHTML = `
             <button id="back-to-search-from-amount-btn" style="align-self: flex-start; background: none; border: none; color: #666; cursor: pointer; font-size: 0.9rem; margin-bottom: 0.75rem; padding: 0;">← Back to search</button>
 
-            <div style="font-weight: bold; font-size: 1.05rem; color: #1a1a2e; margin-bottom: 0.25rem;">${this.escapeHtml(food.description)}</div>
+            <div style="font-weight: bold; font-size: 1.05rem; color: #1a1a2e; margin-bottom: 0.25rem;">${escapeHtml(food.description)}</div>
             <div style="font-size: 0.8rem; color: #999; margin-bottom: 1rem;">
                 ${Math.round(food.calories_kcal)} kcal · ${food.protein_g.toFixed(1)}g P · ${food.carbs_g.toFixed(1)}g C · ${food.fat_g.toFixed(1)}g F
                 <span style="color: #999;">(per 100g)</span>
@@ -2715,7 +2626,7 @@ const foodSearch = {
 
         container.innerHTML = units.map((u) => `
             <button type="button" class="unit-chip" data-unit="${u.unit}" style="${chipStyle(u.unit === this.amountUnit)}">
-                ${this.escapeHtml(u.label)}
+                ${escapeHtml(u.label)}
                 ${u.servingId ? `<span class="delete-serving-chip" data-serving-id="${u.servingId}" style="color: ${u.unit === this.amountUnit ? 'white' : '#dc3545'}; font-weight: bold;">×</span>` : ''}
             </button>
         `).join('');
@@ -2980,7 +2891,7 @@ const foodSearch = {
 
         formEl.innerHTML = `
             <label style="${labelStyle}">${isUsda ? 'Food name' : 'Product name'}</label>
-            <input type="text" id="product-name-input" value="${this.escapeHtml(food.description)}" style="${fieldStyle}">
+            <input type="text" id="product-name-input" value="${escapeHtml(food.description)}" style="${fieldStyle}">
 
             <p style="font-size: 0.8rem; color: #999; margin-bottom: 0.5rem;">Per 100g:</p>
 
@@ -3050,7 +2961,7 @@ const foodSearch = {
             if (this.editingServingId === s.id) {
                 return `
                     <div style="display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem;">
-                        <input type="text" id="inline-serving-label-input" value="${this.escapeHtml(s.label)}" style="${fieldStyle} flex: 1;">
+                        <input type="text" id="inline-serving-label-input" value="${escapeHtml(s.label)}" style="${fieldStyle} flex: 1;">
                         <input type="number" step="any" min="0" id="inline-serving-grams-input" value="${s.grams_per_unit}" style="${fieldStyle} width: 64px;">
                         <span style="font-size: 0.8rem; color: #666;">g</span>
                         <button type="button" class="save-serving-inline-btn" data-serving-id="${s.id}" style="background: none; border: none; color: #2e7d32; cursor: pointer; font-size: 1rem; padding: 0 0.25rem;">✓</button>
@@ -3060,7 +2971,7 @@ const foodSearch = {
             }
             return `
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; font-size: 0.85rem;">
-                    <span>${this.escapeHtml(s.label)} = ${s.grams_per_unit}g</span>
+                    <span>${escapeHtml(s.label)} = ${s.grams_per_unit}g</span>
                     <span>
                         <button type="button" class="edit-serving-inline-btn" data-serving-id="${s.id}" style="background: none; border: none; color: #666; cursor: pointer; font-size: 0.85rem; padding: 0 0.35rem;">✎</button>
                         <button type="button" class="delete-serving-inline-btn" data-serving-id="${s.id}" style="background: none; border: none; color: #dc3545; cursor: pointer; font-size: 0.95rem; padding: 0 0.35rem;">×</button>
@@ -3277,7 +3188,7 @@ const foodSearch = {
 
         formEl.innerHTML = `
             <label style="${labelStyle}">Product name</label>
-            <input type="text" id="product-name-input" value="${this.escapeHtml(String(name))}" style="${fieldStyle}">
+            <input type="text" id="product-name-input" value="${escapeHtml(String(name))}" style="${fieldStyle}">
 
             <p style="font-size: 0.8rem; color: #999; margin-bottom: 0.5rem;">
                 Per 100g${extracted.serving_size_g ? ` (converted from a ${extracted.serving_size_g}g serving)` : ''}:
@@ -3502,8 +3413,8 @@ const foodSearch = {
             return `
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0;">
                 <div style="flex: 1;">
-                    <div style="font-weight: bold;">${this.escapeHtml(item.name)}</div>
-                    <div class="item-serving" data-index="${index}" style="font-size: 0.75rem; color: #e94560; margin-top: 0.1rem;">${servingText ? this.escapeHtml(servingText) : ''}</div>
+                    <div style="font-weight: bold;">${escapeHtml(item.name)}</div>
+                    <div class="item-serving" data-index="${index}" style="font-size: 0.75rem; color: #e94560; margin-top: 0.1rem;">${servingText ? escapeHtml(servingText) : ''}</div>
                     <div style="display: flex; align-items: center; gap: 0.4rem; margin-top: 0.25rem;">
                         <input type="number" min="1" step="1" value="${item.grams}" data-index="${index}" class="item-grams-input"
                             style="width: 64px; padding: 0.3rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.85rem;">
@@ -3681,14 +3592,14 @@ const foodSearch = {
         listEl.innerHTML = templates.map((template) => `
             <div class="history-card">
                 <div class="history-card-header">
-                    <span class="history-card-name">${this.escapeHtml(template.name)}</span>
+                    <span class="history-card-name">${escapeHtml(template.name)}</span>
                     <span>
                         <button class="history-menu-btn" onclick="foodSearch.editMealTemplate(${template.id})">✏️</button>
                         <button class="history-menu-btn" onclick="foodSearch.deleteMealTemplate(${template.id})">🗑️</button>
                     </span>
                 </div>
                 <div style="font-size: 0.85rem; color: #666; margin-bottom: 0.5rem;">
-                    ${template.items.map((item) => this.escapeHtml(item.name)).join(', ')}
+                    ${template.items.map((item) => escapeHtml(item.name)).join(', ')}
                 </div>
                 <div style="font-size: 0.85rem; font-weight: bold; margin-bottom: 0.5rem;">
                     ${Math.round(template.total_calories)} kcal · ${template.total_protein_g.toFixed(1)}g P · ${template.total_carbs_g.toFixed(1)}g C · ${template.total_fat_g.toFixed(1)}g F
@@ -3873,17 +3784,6 @@ const foodSearch = {
     },
 
     /**
-     * Format a date-only string (YYYY-MM-DD) for display. Parsed as local
-     * calendar date components (not via `new Date(dateStr)`, which reads a
-     * bare date as UTC midnight and can roll back a day in timezones behind UTC).
-     */
-    formatDate(dateStr) {
-        const [year, month, day] = dateStr.split('-').map(Number);
-        const date = new Date(year, month - 1, day);
-        return date.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
-    },
-
-    /**
      * Show meal menu (dropdown options) - same pattern as the workout menu (Edit/Delete)
      */
     showMealMenu(mealId, event) {
@@ -3986,8 +3886,8 @@ const foodSearch = {
                         : `${item.grams} g`;
                     return `
                     <div class="meal-history-detail-food">
-                        <div class="meal-history-detail-food-name">${this.escapeHtml(item.name)}</div>
-                        <div class="meal-history-detail-food-grams">${this.escapeHtml(amountText)}</div>
+                        <div class="meal-history-detail-food-name">${escapeHtml(item.name)}</div>
+                        <div class="meal-history-detail-food-grams">${escapeHtml(amountText)}</div>
                         <div class="meal-history-detail-food-macros">
                             ${Math.round(item.calories)} kcal · ${item.protein_g.toFixed(1)}g P · ${item.carbs_g.toFixed(1)}g C · ${item.fat_g.toFixed(1)}g F
                         </div>
@@ -4008,7 +3908,7 @@ const foodSearch = {
                 </div>
 
                 <div class="meal-history-detail-content">
-                    <div class="meal-history-detail-date">${this.formatDate(meal.meal_date)}</div>
+                    <div class="meal-history-detail-date">${formatDate(meal.meal_date)}</div>
 
                     <div class="meal-history-detail-stats">
                         <div class="meal-history-detail-stat" title="Total Calories">
@@ -4182,14 +4082,6 @@ const foodSearch = {
         }
     },
 
-    /**
-     * Escape HTML to prevent XSS
-     */
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
 };
 
 // Expose foodSearch globally: inline onclick="foodSearch...." handlers in
@@ -4393,7 +4285,7 @@ const checkin = {
             }
 
             const photoHtml = c.photo_path
-                ? `<img src="${this.escapeHtml(c.photo_path)}" class="checkin-card-photo">`
+                ? `<img src="${escapeHtml(c.photo_path)}" class="checkin-card-photo">`
                 : '';
 
             const statsParts = [];
@@ -4407,27 +4299,17 @@ const checkin = {
             return `
                 <div class="history-card" onclick="checkin.showDetail(${c.id})">
                     <div class="history-card-header">
-                        <span class="history-card-name">${this.formatDate(c.checkin_date)}</span>
+                        <span class="history-card-name">${formatDate(c.checkin_date)}</span>
                         <button class="history-menu-btn" onclick="event.stopPropagation(); checkin.showMenu(${c.id}, event)">☰</button>
                     </div>
                     ${photoHtml}
                     <div style="font-size: 0.9rem; color: #333; margin-bottom: 0.25rem;">
-                        ${statsParts.length > 0 ? this.escapeHtml(statsParts.join(' · ')) : '<span style="color:#999;">No measurements recorded</span>'}
+                        ${statsParts.length > 0 ? escapeHtml(statsParts.join(' · ')) : '<span style="color:#999;">No measurements recorded</span>'}
                     </div>
                     ${deltaHtml}
                 </div>
             `;
         }).join('');
-    },
-
-    /**
-     * Format a date-only string (YYYY-MM-DD) as local calendar components,
-     * avoiding the UTC-midnight rollback bug from `new Date(dateStr)`.
-     */
-    formatDate(dateStr) {
-        const [year, month, day] = dateStr.split('-').map(Number);
-        const date = new Date(year, month - 1, day);
-        return date.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
     },
 
     /**
@@ -4492,11 +4374,11 @@ const checkin = {
             panel.innerHTML = `
                 <div class="checkin-detail-header">
                     <button class="checkin-detail-close" onclick="this.closest('.checkin-detail-panel').remove()">×</button>
-                    <div class="checkin-detail-title">${this.formatDate(c.checkin_date)}</div>
+                    <div class="checkin-detail-title">${formatDate(c.checkin_date)}</div>
                     <button onclick="checkin.editCheckin(${checkinId}); this.closest('.checkin-detail-panel').remove()" class="checkin-detail-edit-btn">Edit</button>
                 </div>
                 <div class="checkin-detail-content">
-                    ${c.photo_path ? `<img src="${this.escapeHtml(c.photo_path)}" class="checkin-detail-photo">` : ''}
+                    ${c.photo_path ? `<img src="${escapeHtml(c.photo_path)}" class="checkin-detail-photo">` : ''}
                     <div class="checkin-detail-stats">
                         ${statHtml('Weight', c.weight_kg != null ? `${c.weight_kg} kg` : null)}
                         ${statHtml('Waist', c.waist_cm != null ? `${c.waist_cm} cm` : null)}
@@ -4505,7 +4387,7 @@ const checkin = {
                         ${statHtml('Arm', c.arm_cm != null ? `${c.arm_cm} cm` : null)}
                         ${statHtml('Thigh', c.thigh_cm != null ? `${c.thigh_cm} cm` : null)}
                     </div>
-                    ${c.notes ? `<div class="checkin-detail-notes">${this.escapeHtml(c.notes)}</div>` : ''}
+                    ${c.notes ? `<div class="checkin-detail-notes">${escapeHtml(c.notes)}</div>` : ''}
                 </div>
             `;
 
@@ -4552,7 +4434,7 @@ const checkin = {
             const previewEl = document.getElementById('checkin-photo-preview');
             if (previewEl) {
                 if (c.photo_path) {
-                    previewEl.innerHTML = `<img src="${this.escapeHtml(c.photo_path)}" style="max-width: 100%; border-radius: 8px;"><p style="font-size: 0.8rem; color: #666; margin-top: 0.25rem;">Current photo - pick a new file to replace it</p>`;
+                    previewEl.innerHTML = `<img src="${escapeHtml(c.photo_path)}" style="max-width: 100%; border-radius: 8px;"><p style="font-size: 0.8rem; color: #666; margin-top: 0.25rem;">Current photo - pick a new file to replace it</p>`;
                     previewEl.style.display = 'block';
                 } else {
                     previewEl.innerHTML = '';
@@ -4583,14 +4465,6 @@ const checkin = {
         }
     },
 
-    /**
-     * Escape HTML to prevent XSS
-     */
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
 };
 
 // Expose globally for inline onclick="checkin...." handlers (see foodSearch
@@ -4616,10 +4490,10 @@ const today = {
         if (skipTodayBtn) {
             skipTodayBtn.addEventListener('click', () => {
                 // Button doubles as skip / un-skip depending on today's state
-                if (this.isDateSkipped(this.todayString())) {
-                    this.unskipDate(this.todayString());
+                if (this.isDateSkipped(todayString())) {
+                    this.unskipDate(todayString());
                 } else {
-                    this.skipDate(this.todayString());
+                    this.skipDate(todayString());
                 }
             });
         }
@@ -4627,8 +4501,8 @@ const today = {
         const skipDateInput = document.getElementById('skip-date-input');
         const skipDateBtn = document.getElementById('skip-date-btn');
         if (skipDateInput) {
-            skipDateInput.max = this.todayString();
-            skipDateInput.value = this.todayString();
+            skipDateInput.max = todayString();
+            skipDateInput.value = todayString();
         }
         if (skipDateBtn) {
             skipDateBtn.addEventListener('click', () => {
@@ -4672,29 +4546,8 @@ const today = {
         }
     },
 
-    /** Today's date as YYYY-MM-DD in local time, matching meal_date's format */
-    todayString() {
-        const now = new Date();
-        const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-        return local.toISOString().slice(0, 10);
-    },
-
-    /** Local YYYY-MM-DD for an arbitrary date/datetime input */
-    localDateStr(dateInput) {
-        const d = new Date(dateInput);
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    },
-
-    /** Midnight (local) of the Monday starting the current calendar week */
-    weekStart() {
-        const now = new Date();
-        const day = now.getDay(); // 0 = Sunday
-        const diffToMonday = (day === 0) ? 6 : day - 1;
-        return new Date(now.getFullYear(), now.getMonth(), now.getDate() - diffToMonday);
-    },
-
     render(goal, meals, skippedDays, workouts) {
-        const todayStr = this.todayString();
+        const todayStr = todayString();
 
         // --- Skipped days ---
         // A skipped day is treated as "no data": its meals don't count toward
@@ -4723,7 +4576,7 @@ const today = {
             } else {
                 skippedDaysListEl.innerHTML = sorted.map(d => `
                     <span style="display: flex; align-items: center; justify-content: space-between; padding: 0.25rem 0; gap: 0.5rem;">
-                        <span>📅 <strong>${this.formatDate(d)}</strong></span>
+                        <span>📅 <strong>${formatDate(d)}</strong></span>
                         <button onclick="today.unskipDate('${d}')" style="
                             background: none; border: none; cursor: pointer;
                             color: #dc3545; font-size: 0.8rem; padding: 0.1rem 0.4rem;
@@ -4755,11 +4608,11 @@ const today = {
             : `${totalFat.toFixed(1)}g`;
 
         // --- Exercise: today's duration + this week's workout count vs goal ---
-        const todaysWorkouts = (workouts || []).filter((w) => this.localDateStr(w.started_at) === todayStr);
+        const todaysWorkouts = (workouts || []).filter((w) => localDateStr(w.started_at) === todayStr);
         const totalDurationSec = todaysWorkouts.reduce((sum, w) => sum + (w.duration_seconds || 0), 0);
         document.getElementById('exercise-duration').textContent = `${Math.round(totalDurationSec / 60)} min`;
 
-        const weekStartDate = this.weekStart();
+        const weekStartDate = weekStart();
         const thisWeeksWorkouts = (workouts || []).filter((w) => new Date(w.started_at) >= weekStartDate);
         document.getElementById('training-days-progress').textContent = goal.training_days_per_week != null
             ? `${thisWeeksWorkouts.length} / ${goal.training_days_per_week} workouts`
@@ -4782,7 +4635,7 @@ const today = {
         if (goal.fat_target_g != null) parts.push(`${goal.fat_target_g}g fat`);
         if (goal.training_days_per_week != null) parts.push(`train ${goal.training_days_per_week}x/week`);
         if (goal.target_weight_kg != null) {
-            parts.push(`target weight ${goal.target_weight_kg}kg${goal.target_date ? ` by ${this.formatDate(goal.target_date)}` : ''}`);
+            parts.push(`target weight ${goal.target_weight_kg}kg${goal.target_date ? ` by ${formatDate(goal.target_date)}` : ''}`);
         }
 
         if (parts.length === 0) {
@@ -4790,7 +4643,7 @@ const today = {
             summaryEl.innerHTML = 'No goal set yet.';
         } else {
             summaryEl.className = '';
-            summaryEl.innerHTML = parts.map((p) => this.escapeHtml(p)).join('<br>');
+            summaryEl.innerHTML = parts.map((p) => escapeHtml(p)).join('<br>');
         }
     },
 
@@ -4861,22 +4714,6 @@ const today = {
     },
 
     /**
-     * Format a date-only string (YYYY-MM-DD) as local calendar components,
-     * avoiding the UTC-midnight rollback bug from `new Date(dateStr)`.
-     */
-    formatDate(dateStr) {
-        const [year, month, day] = dateStr.split('-').map(Number);
-        const date = new Date(year, month - 1, day);
-        return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-    },
-
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    },
-
-    /**
      * Mark any calendar date (today or in the past) as skipped for food
      * tracking. Backend is idempotent, so re-skipping a date is harmless.
      */
@@ -4912,14 +4749,6 @@ const today = {
 };
 
 window.today = today;
-
-// Format a date-only string (YYYY-MM-DD) for compact chart labels, e.g. "Aug 5".
-// Parsed as local calendar components (same reasoning as foodSearch.formatDate).
-function formatShortDate(dateStr) {
-    const [year, month, day] = dateStr.split('-').map(Number);
-    const date = new Date(year, month - 1, day);
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
 
 // Hand-rolled inline SVG line chart, shared by the Progress tab's weight,
 // calories, and strength charts. points: [{date, value}], sorted ascending.
@@ -5086,7 +4915,7 @@ const progress = {
             const logged = await api.get('/exercises/logged');
             const current = select.value;
             select.innerHTML = '<option value="">Select an exercise…</option>' +
-                logged.map((g) => `<option value="${this.escapeHtml(g.name)}">${this.escapeHtml(g.name)} (${g.count}×)</option>`).join('');
+                logged.map((g) => `<option value="${escapeHtml(g.name)}">${escapeHtml(g.name)} (${g.count}×)</option>`).join('');
             if (current) select.value = current;
         } catch (error) {
             console.error('Error loading logged exercises:', error);
@@ -5109,7 +4938,7 @@ const progress = {
 
             if (points.length === 0) {
                 container.className = 'empty-state';
-                container.innerHTML = `No weighted sets logged yet for ${this.escapeHtml(exerciseName)}.`;
+                container.innerHTML = `No weighted sets logged yet for ${escapeHtml(exerciseName)}.`;
                 return;
             }
 
@@ -5118,12 +4947,6 @@ const progress = {
         } catch (error) {
             console.error('Error loading strength chart:', error);
         }
-    },
-
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
     },
 };
 
@@ -5292,12 +5115,6 @@ function createMealCard(meal) {
             ${itemsHtml}
         </div>
     `;
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
 }
 
 // Initialize day card toggles
