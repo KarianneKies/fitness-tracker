@@ -4533,17 +4533,39 @@ const today = {
      */
     async loadToday() {
         try {
-            const [goal, meals, skippedDays, workouts] = await Promise.all([
+            const [goal, meals, skippedDays, workouts, evalToday] = await Promise.all([
                 api.get('/goal'),
                 api.get('/meals'),
                 api.get('/skipped-days').catch(() => []),
                 api.get('/workouts'),
+                api.get('/evaluation/daily').catch(() => null),
             ]);
             this.currentGoal = goal;
             this.render(goal, meals, skippedDays, workouts);
+            this.renderEvaluation(evalToday);
         } catch (error) {
             console.error('Error loading today overview:', error);
         }
+    },
+
+    /** One-line verdict for today, from GET /evaluation/daily. */
+    renderEvaluation(evalToday) {
+        const el = document.getElementById('today-evaluation');
+        if (!el) return;
+        if (!evalToday) { el.textContent = ''; return; }
+
+        const cal = evalToday.calories || {};
+        const labels = {
+            skipped: '📅 Day skipped — not counted',
+            no_data: '— Nothing logged yet today',
+            no_target: 'Set a calorie goal to see how today compares',
+            on_track: `✅ On track — ${cal.actual ?? 0} / ${cal.target ?? '?'} kcal`,
+            over: `⬆️ Over by ${cal.delta ?? '?'} kcal (${cal.actual ?? 0} / ${cal.target ?? '?'})`,
+            under: `⬇️ Under by ${Math.abs(cal.delta ?? 0)} kcal (${cal.actual ?? 0} / ${cal.target ?? '?'})`,
+        };
+        const colors = { on_track: '#198754', over: '#b02a37', under: '#b8860b' };
+        el.textContent = labels[evalToday.status] ?? '';
+        el.style.color = colors[evalToday.status] ?? '#666';
     },
 
     render(goal, meals, skippedDays, workouts) {

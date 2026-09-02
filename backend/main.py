@@ -27,7 +27,9 @@ from fastapi.responses import JSONResponse
 from .config import FRONTEND_DIR, PHOTOS_DIR
 from .database import create_db_and_tables, get_session
 from .workout_suggestion import seed_default_knee_exercises
-from .routers import workouts, exercises, foods, meals, checkins, goals, skipped_days
+from .routers import (
+    workouts, exercises, foods, meals, checkins, goals, skipped_days, evaluation,
+)
 
 
 app = FastAPI(
@@ -84,7 +86,9 @@ def health_check():
     return {"status": "ok", "service": "fitness-tracker-api"}
 
 
-for _router in (workouts, exercises, foods, meals, checkins, goals, skipped_days):
+for _router in (
+    workouts, exercises, foods, meals, checkins, goals, skipped_days, evaluation,
+):
     app.include_router(_router.router)
 
 

@@ -270,6 +270,54 @@ def test_checkin_crud_without_photo(client):
     assert client.get(f"/checkins/{cid}").status_code == 404
 
 
+# ---------- evaluation ----------
+def test_daily_evaluation(client):
+    client.put("/goal", json={"calorie_target": 2000, "protein_target_g": 150})
+    client.post("/meals", json={
+        "name": "All day", "meal_date": "2026-06-01", "items": [
+            {"name": "Big", "grams": 500, "calories": 2100, "protein_g": 160, "carbs_g": 200, "fat_g": 70},
+        ],
+    })
+    r = client.get("/evaluation/daily", params={"day": "2026-06-01"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "on_track"          # 2100 within 10% of 2000
+    assert body["calories"]["actual"] == 2100.0
+    assert body["calories"]["delta"] == 100.0
+    assert body["protein_g"]["pct_of_target"] == 107
+
+    # a day with nothing logged
+    assert client.get("/evaluation/daily", params={"day": "2020-01-01"}).json()["status"] == "no_data"
+
+    # a skipped day reads as skipped, not as a missed target
+    client.post("/skipped-days", json={"skip_date": "2026-06-02"})
+    r = client.get("/evaluation/daily", params={"day": "2026-06-02"})
+    assert r.json()["status"] == "skipped" and r.json()["skipped"] is True
+
+    assert client.get("/evaluation/daily", params={"day": "bad"}).status_code == 400
+
+
+def test_weekly_evaluation_excludes_skipped(client):
+    client.put("/goal", json={"calorie_target": 2000, "training_days_per_week": 3})
+    # Mon 2026-06-08 .. Sun 2026-06-14
+    for d, cal in [("2026-06-08", 2000), ("2026-06-09", 2000), ("2026-06-10", 6000)]:
+        client.post("/meals", json={"name": "d", "meal_date": d, "items": [
+            {"name": "x", "grams": 1, "calories": cal, "protein_g": 100, "carbs_g": 1, "fat_g": 1},
+        ]})
+    # 2026-06-10 was a blowout, but mark it skipped -> must drop out of the average
+    client.post("/skipped-days", json={"skip_date": "2026-06-10"})
+
+    r = client.get("/evaluation/weekly", params={"week_of": "2026-06-10"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["week_start"] == "2026-06-08" and body["week_end"] == "2026-06-14"
+    assert body["logged_days"] == ["2026-06-08", "2026-06-09"]
+    assert body["skipped_days"] == ["2026-06-10"]
+    assert body["avg_calories"]["actual"] == 2000.0     # 6000 excluded
+    assert body["notable_days"] == []                    # the big day was skipped
+    assert body["training"]["target"] == 3
+
+
 # ---------- validation error shape the frontend parses ----------
 def test_validation_error_is_list_of_loc_msg(client):
     r = client.post("/workouts", json={})  # WorkoutCreate has all-optional fields -> actually ok
