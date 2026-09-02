@@ -11,7 +11,7 @@
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).parent
+REPO_ROOT = Path(__file__).resolve().parent.parent  # repo root (scripts/ is one level down)
 sys.path.insert(0, str(REPO_ROOT))
 
 from backend.database import get_session

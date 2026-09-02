@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-REPO_ROOT = Path(__file__).parent
+REPO_ROOT = Path(__file__).resolve().parent.parent  # repo root (scripts/ is one level down)
 CSV_PATH = REPO_ROOT / "strong_workouts.csv"
 
 sys.path.insert(0, str(REPO_ROOT))

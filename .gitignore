@@ -6,12 +6,16 @@ data/openfoodfacts/
 # Personal workout export (must never be committed)
 strong_workouts.csv
 
-# Database files
+# Database files and their backups (personal health data)
 *.db
+*.db.bak*
+*.db-wal
+*.db-shm
 
 # Python cache and virtual environment
 __pycache__/
 .venv/
+.pytest_cache/
 
 # IDE files
 .vscode/
@@ -21,4 +25,4 @@ __pycache__/
 
 # OS files
 .DS_Store
-Thumbs.db*.db.bak-*
+Thumbs.db
