@@ -6,6 +6,14 @@
 > are not listed. When something is ambiguous, prefer the simplest option that
 > keeps everything local. Build in small, focused steps.
 
+> **Implementation status (2026-09):** the manual workout log, food search +
+> meal logging, check-ins, goals, the "suggest a workout" flow and skip-day
+> tracking are built. The photo->macro (`nutrition.py`) and barcode->macro
+> (`barcode.py`) pipelines described below are **not built** - those modules
+> were removed rather than kept as empty stubs. `evaluation.py` is being
+> built now. Sections describing the unbuilt pipelines are kept as the
+> design to follow if/when they're picked up.
+
 ---
 
 ## 1. What this is

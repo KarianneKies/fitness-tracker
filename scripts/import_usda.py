@@ -11,7 +11,7 @@ import csv
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).parent
+REPO_ROOT = Path(__file__).resolve().parent.parent  # repo root (scripts/ is one level down)
 USDA_DIR = REPO_ROOT / "FoodData_Central_foundation_food_csv_2026-04-30"
 FOOD_CSV = USDA_DIR / "food.csv"
 FOOD_NUTRIENT_CSV = USDA_DIR / "food_nutrient.csv"

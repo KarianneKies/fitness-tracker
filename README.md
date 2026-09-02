@@ -21,22 +21,28 @@ A personal health tracking application built with FastAPI (backend) and vanilla 
 ```
 fitness-tracker/
 ├── backend/
-│   ├── main.py          # FastAPI app with health check
-│   ├── database.py      # SQLModel + SQLite setup
-│   ├── models.py        # Database models (Exercise, Meal, FoodItem, etc.)
-│   ├── config.py        # Application configuration
-│   ├── nutrition.py     # Nutrition analysis stub
-│   ├── barcode.py       # Barcode scanning stub
-│   ├── vision.py        # LM Studio integration stub
-│   └── evaluation.py    # Daily evaluation stub
+│   ├── main.py                # FastAPI app + all API routes
+│   ├── database.py            # SQLModel + SQLite setup, data migrations
+│   ├── models.py              # Database models (Workout, Meal, FoodItem, etc.)
+│   ├── config.py              # Application configuration
+│   ├── vision.py              # LM Studio integration (food photo / label OCR)
+│   ├── muscle_groups.py       # Exercise name -> muscle group mapping
+│   ├── workout_suggestion.py  # "Suggest a workout" logic
+│   └── evaluation.py          # Daily/weekly nutrition + fitness evaluation
 ├── frontend/
-│   ├── index.html       # PWA shell with tabs
-│   ├── app.js           # Frontend logic
-│   ├── sw.js            # Service worker
-│   └── manifest.json    # PWA manifest
-├── data/photos/         # User photos (git-ignored)
-└── requirements.txt     # Python dependencies
+│   ├── index.html             # PWA shell with tabs
+│   ├── app.js                 # Frontend logic
+│   ├── exercises.js           # Canonical exercise list (imported by app.js)
+│   ├── sw.js                  # Service worker
+│   └── manifest.json          # PWA manifest
+├── scripts/                   # One-shot import/backfill utilities
+├── tests/                     # pytest API tests
+├── data/photos/              # User photos (git-ignored)
+└── requirements.txt           # Python dependencies
 ```
+
+The photo→macro and barcode→macro food pipelines described in `SPEC.md`
+are not built yet; there are no stub modules for them.
 
 ## How to Run
 

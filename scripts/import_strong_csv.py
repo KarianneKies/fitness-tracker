@@ -12,7 +12,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).parent
+REPO_ROOT = Path(__file__).resolve().parent.parent  # repo root (scripts/ is one level down)
 CSV_PATH = REPO_ROOT / "strong_workouts.csv"
 
 sys.path.insert(0, str(REPO_ROOT))
