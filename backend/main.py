@@ -27,6 +27,7 @@ from fastapi.responses import JSONResponse
 from .config import FRONTEND_DIR, PHOTOS_DIR
 from .database import create_db_and_tables, get_session
 from .workout_suggestion import seed_default_knee_exercises
+from .evaluation import auto_flag_low_log_days
 from .routers import (
     workouts, exercises, foods, meals, checkins, goals, skipped_days, evaluation,
 )
@@ -41,10 +42,12 @@ app = FastAPI(
 
 @app.on_event("startup")
 def on_startup():
-    """Create tables, run data migrations, and seed default data."""
+    """Create tables, run data migrations, seed default data, and catch up
+    on any past day that logged under evaluation.LOW_LOG_THRESHOLD_KCAL."""
     create_db_and_tables()
     with get_session() as session:
         seed_default_knee_exercises(session)
+        auto_flag_low_log_days(session)
 
 
 # CORS. The PWA is served from this same app (StaticFiles at "/") and calls

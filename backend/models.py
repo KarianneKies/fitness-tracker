@@ -345,9 +345,32 @@ class DailySkippedDay(SQLModel, table=True):
     (if any) don't count toward daily totals, and it is left out of the
     Progress charts entirely rather than being drawn as a zero-calorie day.
     One row per calendar date (skip_date is unique).
+
+    `source` distinguishes a deliberate user action ("manual") from
+    evaluation.auto_flag_low_log_days ("auto"). The difference matters when
+    a day's data changes later: an "auto" row is reconsidered and removed
+    if the day no longer looks low-logged, while a "manual" row is never
+    second-guessed - the user said so.
     """
     __tablename__ = "daily_skipped_days"
 
     id: Optional[int] = Field(default=None, primary_key=True)
     skip_date: date = Field(..., unique=True, index=True, description="Calendar date that was skipped")
+    source: str = Field(default="manual", description="'manual' (user action) or 'auto' (low-log rule)")
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")
+
+
+class SkipDayOverride(SQLModel, table=True):
+    """
+    A date the user explicitly un-skipped - "count this day even though it
+    looks low-logged". Recorded so evaluation.auto_flag_low_log_days never
+    re-flags it; without this, un-skipping a day under
+    LOW_LOG_THRESHOLD_KCAL would just have it silently reappear on the next
+    check. Cleared if the date is ever skipped again manually, so a later
+    un-skip can record a fresh override.
+    """
+    __tablename__ = "skip_day_overrides"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    skip_date: date = Field(..., unique=True, index=True, description="Date the user chose to keep counted")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of record creation")

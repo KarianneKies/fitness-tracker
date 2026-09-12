@@ -68,6 +68,9 @@ def run_data_migrations() -> None:
         "ALTER TABLE exercises ADD COLUMN muscle_group TEXT",
         "ALTER TABLE food_items ADD COLUMN serving_label TEXT",
         "ALTER TABLE food_items ADD COLUMN serving_count FLOAT",
+        # Existing rows predate the auto-flag feature and were all deliberate
+        # user actions, so they default to 'manual' (never auto-reconsidered).
+        "ALTER TABLE daily_skipped_days ADD COLUMN source TEXT DEFAULT 'manual'",
     ):
         conn = engine.connect()
         try:
