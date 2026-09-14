@@ -21,6 +21,7 @@ from .models import (
     Goal,
     WeeklyCheckin,
     DailySkippedDay,
+    SkipDayOverride,
 )
 
 # How far a day's calories can sit from target before it stops being "on track".
@@ -66,6 +67,88 @@ def _day_macros(session, day: date) -> dict:
         "fat_g": round(fat, 1),
         "meal_count": int(meal_count),
     }
+
+
+# A day logging under this many calories is treated as "didn't really track
+# today" (a snack before giving up counts the same as nothing at all).
+LOW_LOG_THRESHOLD_KCAL = 1000
+
+
+def auto_flag_low_log_days(session) -> list:
+    """
+    Keep skipped-day status in sync with each day's logged calories, for
+    every day from the first-ever meal through yesterday (never today or
+    the future - a day's total isn't final until the day is over):
+
+    - A day under LOW_LOG_THRESHOLD_KCAL (0 included, i.e. nothing logged
+      at all) gets an "auto" skip, unless the user has an explicit
+      SkipDayOverride on it ("no, count this day" always wins).
+    - A day previously auto-flagged that now has enough calories (e.g. she
+      backfilled meals for a day the check had already flagged) gets its
+      auto-flag removed - it's reconsidered every time, since nothing
+      about it was ever a deliberate user choice.
+    - A "manual" skip (the user's own Skip Day button) is never touched
+      either way, regardless of its calories.
+
+    Idempotent - safe to call on every request that reads skipped/evaluated
+    data. Returns the list of dates newly auto-flagged, oldest first.
+    """
+    first_meal_date = session.query(func.min(Meal.meal_date)).scalar()
+    if first_meal_date is None:
+        return []
+
+    yesterday = date.today() - timedelta(days=1)
+    if first_meal_date > yesterday:
+        return []
+
+    existing = {
+        row.skip_date: row
+        for row in session.query(DailySkippedDay).filter(
+            DailySkippedDay.skip_date >= first_meal_date,
+            DailySkippedDay.skip_date <= yesterday,
+        ).all()
+    }
+    overridden = {
+        r[0] for r in session.query(SkipDayOverride.skip_date).filter(
+            SkipDayOverride.skip_date >= first_meal_date,
+            SkipDayOverride.skip_date <= yesterday,
+        ).all()
+    }
+
+    # Per-day totals for every day that has at least one meal; a day with
+    # none at all simply won't appear here and defaults to 0 below.
+    totals = dict(
+        session.query(Meal.meal_date, func.coalesce(func.sum(FoodItem.calories), 0.0))
+        .select_from(Meal)
+        .join(FoodItem, FoodItem.meal_id == Meal.id)
+        .filter(Meal.meal_date >= first_meal_date, Meal.meal_date <= yesterday)
+        .group_by(Meal.meal_date)
+        .all()
+    )
+
+    newly_flagged = []
+    changed = False
+    day = first_meal_date
+    while day <= yesterday:
+        is_low = totals.get(day, 0.0) < LOW_LOG_THRESHOLD_KCAL
+        row = existing.get(day)
+
+        if row is None:
+            if is_low and day not in overridden:
+                session.add(DailySkippedDay(skip_date=day, source="auto"))
+                newly_flagged.append(day)
+                changed = True
+        elif row.source == "auto" and not is_low:
+            # data changed since this was flagged - reconsider it
+            session.delete(row)
+            changed = True
+        # row.source == "manual": never touched, whatever its calories are
+
+        day += timedelta(days=1)
+
+    if changed:
+        session.commit()
+    return newly_flagged
 
 
 def _workouts_on(session, day: date) -> dict:

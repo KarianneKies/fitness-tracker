@@ -4,6 +4,8 @@ These are smoke/contract tests: they exercise each router's happy path and
 the error shapes the frontend depends on, not every branch.
 """
 
+from datetime import date, timedelta
+
 
 def test_health(client):
     r = client.get("/health")
@@ -209,6 +211,10 @@ def test_exercise_guide_match_and_miss(client):
 
 
 def test_exercise_history(client):
+    # POST /workouts always stamps started_at = now; there's no way to
+    # backdate it via the API (by design - see docs/PURGE-HISTORY.md-style
+    # backdating goes through direct DB writes), so the expected date here
+    # has to track the real "today", not a hardcoded one.
     wid = client.post("/workouts", json={"name": "H"}).json()["id"]
     client.patch(f"/workouts/{wid}", json={"exercises": [
         {"name": "Hip Thrust (Barbell)", "order": 0, "sets": [
@@ -216,7 +222,7 @@ def test_exercise_history(client):
             {"order": 1, "reps": 6, "weight_kg": 110.0, "to_failure": True},
         ]},
     ]})
-    client.patch(f"/workouts/{wid}", json={"finished_at": "2026-09-02T10:00:00"})
+    client.patch(f"/workouts/{wid}", json={"finished_at": f"{date.today().isoformat()}T10:00:00"})
 
     # base-name match: query without the "(Barbell)" qualifier
     r = client.get("/exercises/history", params={"name": "Hip Thrust"})
@@ -224,7 +230,7 @@ def test_exercise_history(client):
     hist = r.json()
     assert len(hist) == 1
     assert hist[0]["workout_id"] == wid
-    assert hist[0]["date"] == "2026-09-02"
+    assert hist[0]["date"] == date.today().isoformat()
     assert len(hist[0]["sets"]) == 2
     assert hist[0]["sets"][1]["weight_kg"] == 110.0 and hist[0]["sets"][1]["to_failure"] is True
 
@@ -308,6 +314,37 @@ def test_checkin_crud_without_photo(client):
     assert client.get(f"/checkins/{cid}").status_code == 404
 
 
+# ---------- auto-flagging low-log days as skipped ----------
+def test_auto_flag_low_log_days(client):
+    low_day = (date.today() - timedelta(days=3)).isoformat()     # 500 kcal -> flagged
+    ok_day = (date.today() - timedelta(days=2)).isoformat()      # 2000 kcal -> not flagged
+    zero_day = (date.today() - timedelta(days=1)).isoformat()    # nothing logged -> flagged
+    today = date.today().isoformat()                             # nothing logged, but is TODAY -> never touched
+
+    client.post("/meals", json={"name": "d", "meal_date": low_day, "items": [
+        {"name": "x", "grams": 1, "calories": 500, "protein_g": 1, "carbs_g": 1, "fat_g": 1},
+    ]})
+    client.post("/meals", json={"name": "d", "meal_date": ok_day, "items": [
+        {"name": "x", "grams": 1, "calories": 2000, "protein_g": 1, "carbs_g": 1, "fat_g": 1},
+    ]})
+    # zero_day and today: no meals at all
+
+    skipped = {d["skip_date"] for d in client.get("/skipped-days").json()}
+    assert low_day in skipped
+    assert zero_day in skipped
+    assert ok_day not in skipped
+    assert today not in skipped
+
+    # idempotent: calling again doesn't duplicate or un-skip anything
+    skipped2 = {d["skip_date"] for d in client.get("/skipped-days").json()}
+    assert skipped2 == skipped
+
+    # a manual un-skip sticks - auto-flagging never re-adds it
+    client.delete(f"/skipped-days/{low_day}")
+    skipped3 = {d["skip_date"] for d in client.get("/skipped-days").json()}
+    assert low_day not in skipped3
+
+
 # ---------- evaluation ----------
 def test_daily_evaluation(client):
     client.put("/goal", json={"calorie_target": 2000, "protein_target_g": 150})
@@ -350,7 +387,10 @@ def test_weekly_evaluation_excludes_skipped(client):
     body = r.json()
     assert body["week_start"] == "2026-06-08" and body["week_end"] == "2026-06-14"
     assert body["logged_days"] == ["2026-06-08", "2026-06-09"]
-    assert body["skipped_days"] == ["2026-06-10"]
+    # Other days later in the week may also be auto-flagged (no meals at
+    # all, since this test's data is deliberately sparse) - the one thing
+    # that must hold is that the manual skip is in there.
+    assert "2026-06-10" in body["skipped_days"]
     assert body["avg_calories"]["actual"] == 2000.0     # 6000 excluded
     assert body["notable_days"] == []                    # the big day was skipped
     assert body["training"]["target"] == 3
