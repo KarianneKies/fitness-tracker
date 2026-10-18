@@ -59,6 +59,44 @@ def test_workout_404s(client):
     assert client.delete("/workouts/999999").status_code == 404
 
 
+def test_workout_export_csv(client):
+    wid = client.post("/workouts", json={"name": "Export Me"}).json()["id"]
+    client.patch(f"/workouts/{wid}", json={"exercises": [
+        {"name": "Squat (Barbell)", "order": 0, "sets": [
+            {"order": 0, "reps": 5, "weight_kg": 60.0, "to_failure": False},
+            {"order": 1, "reps": 3, "weight_kg": 65.0, "to_failure": True},
+        ]},
+    ]})
+
+    r = client.get("/workouts/export")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert 'attachment; filename="training-export-' in r.headers["content-disposition"]
+
+    lines = r.text.strip().splitlines()
+    header = lines[0].split(",")
+    assert header == [
+        "date", "workout_name", "exercise_name", "muscle_group", "set_number",
+        "weight_kg", "reps", "hold_seconds", "to_failure", "rest_seconds", "note",
+    ]
+    rows = [l for l in lines[1:] if "Export Me" in l]
+    assert len(rows) == 2
+    assert rows[0].split(",")[:7] == [
+        date.today().isoformat(), "Export Me", "Squat (Barbell)", "Legs", "1", "60.0", "5",
+    ]
+    assert rows[1].split(",")[8] == "yes"  # to_failure column for the second set
+
+    # date-range filtering excludes everything outside the window
+    far_past = client.get("/workouts/export", params={
+        "start_date": "2000-01-01", "end_date": "2000-01-02",
+    })
+    assert "Export Me" not in far_past.text
+
+    assert client.get("/workouts/export", params={"start_date": "nope"}).status_code == 400
+
+    client.delete(f"/workouts/{wid}")
+
+
 # ---------- meals ----------
 def _meal_payload(**over):
     base = {
@@ -110,6 +148,36 @@ def test_meal_bad_date(client):
     r = client.post("/meals", json=_meal_payload(meal_date="02-09-2026"))
     assert r.status_code == 400
     assert "YYYY-MM-DD" in r.json()["detail"]
+
+
+def test_meal_export_csv(client):
+    client.post("/meals", json={
+        "name": "Export Lunch", "meal_date": "2026-05-01", "items": [
+            {"name": "Rice", "grams": 150, "calories": 195.26, "protein_g": 4.05, "carbs_g": 42.3, "fat_g": 0.34},
+        ],
+    })
+
+    r = client.get("/meals/export")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert 'attachment; filename="food-log-export-' in r.headers["content-disposition"]
+
+    lines = r.text.strip().splitlines()
+    assert lines[0].split(",") == [
+        "date", "meal_name", "meal_time", "food_name", "grams", "calories",
+        "protein_g", "carbs_g", "fat_g", "source", "serving_label", "serving_count",
+    ]
+    row = next(l for l in lines[1:] if "Export Lunch" in l).split(",")
+    assert row[0] == "2026-05-01" and row[3] == "Rice" and row[4] == "150.0"
+    assert row[5] == "195.3"  # rounded to 1 decimal
+
+    far_past = client.get("/meals/export", params={"start_date": "2000-01-01", "end_date": "2000-01-02"})
+    assert "Export Lunch" not in far_past.text
+
+    only_that_day = client.get("/meals/export", params={"start_date": "2026-05-01", "end_date": "2026-05-01"})
+    assert "Export Lunch" in only_that_day.text
+
+    assert client.get("/meals/export", params={"start_date": "nope"}).status_code == 400
 
 
 # ---------- meal templates ----------

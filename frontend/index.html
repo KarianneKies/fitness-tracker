@@ -926,7 +926,10 @@
                 </div>
 
                 <div class="card">
-                    <h3>Nutrition Diary</h3>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                        <h3 style="margin-bottom: 0;">Nutrition Diary</h3>
+                        <a id="export-meals-csv" href="/meals/export" download class="btn btn-secondary" style="width: auto; padding: 0.4rem 0.9rem; font-size: 0.85rem; text-decoration: none;">⬇ Export CSV</a>
+                    </div>
                     <div id="diary-list" class="empty-state">No meals logged yet.</div>
                 </div>
             </div>
@@ -970,7 +973,10 @@
                 
                 <!-- Past Workouts Section -->
                 <div class="card">
-                    <h3 style="margin-bottom: 0.75rem;">Past Workouts</h3>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                        <h3 style="margin-bottom: 0;">Past Workouts</h3>
+                        <a id="export-workouts-csv" href="/workouts/export" download class="btn btn-secondary" style="width: auto; padding: 0.4rem 0.9rem; font-size: 0.85rem; text-decoration: none;">⬇ Export CSV</a>
+                    </div>
                     <div id="workout-list" class="empty-state">
                         No workouts logged yet.
                     </div>

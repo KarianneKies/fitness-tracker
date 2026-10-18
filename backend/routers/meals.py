@@ -1,9 +1,12 @@
 # routers/meals.py — Meals, the by-day nutrition diary, and reusable meal templates
 
+import csv
+import io
 from datetime import date, datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..database import get_session
@@ -167,6 +170,70 @@ def get_meals():
     with get_session() as session:
         meals = session.query(Meal).order_by(Meal.meal_date.desc(), Meal.created_at.desc()).all()
         return [_serialize_meal(m, _meal_items(session, m.id)) for m in meals]
+
+
+@router.get("/meals/export")
+def export_meals_csv(start_date: Optional[str] = None, end_date: Optional[str] = None):
+    """
+    Export every logged food item as a CSV file, one row per item, oldest
+    meal first - the natural shape for a spreadsheet pivot by food, day or
+    meal. `start_date`/`end_date` (YYYY-MM-DD, inclusive) optionally narrow
+    it to a range by meal_date.
+
+    Registered before /meals/{meal_id} so "export" is never parsed as a
+    meal id - FastAPI matches routes in registration order.
+    """
+    start = _parse_export_date(start_date, "start_date")
+    end = _parse_export_date(end_date, "end_date")
+
+    with get_session() as session:
+        query = session.query(Meal).order_by(Meal.meal_date, Meal.created_at)
+        if start:
+            query = query.filter(Meal.meal_date >= start)
+        if end:
+            query = query.filter(Meal.meal_date <= end)
+        meals = query.all()
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow([
+            "date", "meal_name", "meal_time", "food_name", "grams",
+            "calories", "protein_g", "carbs_g", "fat_g", "source",
+            "serving_label", "serving_count",
+        ])
+        for m in meals:
+            items = _meal_items(session, m.id)
+            for i in items:
+                writer.writerow([
+                    m.meal_date.isoformat(),
+                    m.name or "",
+                    m.meal_time.isoformat() if m.meal_time else "",
+                    i.name,
+                    i.quantity,
+                    round(i.calories, 1) if i.calories is not None else "",
+                    round(i.protein_g, 1) if i.protein_g is not None else "",
+                    round(i.carbs_g, 1) if i.carbs_g is not None else "",
+                    round(i.fat_g, 1) if i.fat_g is not None else "",
+                    i.source or "",
+                    i.serving_label or "",
+                    i.serving_count if i.serving_count is not None else "",
+                ])
+
+        filename = f"food-log-export-{date.today().isoformat()}.csv"
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+
+def _parse_export_date(value: Optional[str], field_name: str) -> Optional[date]:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be YYYY-MM-DD")
 
 
 @router.get("/nutrition/by-day")
