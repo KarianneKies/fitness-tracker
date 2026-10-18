@@ -1,9 +1,12 @@
 # routers/workouts.py — Workout / exercise / set CRUD
 
-from datetime import datetime
+import csv
+import io
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..database import get_session
@@ -159,6 +162,76 @@ def get_workouts():
     with get_session() as session:
         workouts = session.query(Workout).order_by(Workout.started_at.desc()).all()
         return [_serialize_workout(session, w) for w in workouts]
+
+
+@router.get("/workouts/export")
+def export_workouts_csv(start_date: Optional[str] = None, end_date: Optional[str] = None):
+    """
+    Export every logged set as a CSV file, one row per set, oldest first -
+    the natural shape for opening in a spreadsheet and pivoting by exercise
+    or date. `start_date`/`end_date` (YYYY-MM-DD, inclusive) optionally
+    narrow it to a date range by the workout's calendar date.
+
+    Registered before /workouts/{workout_id} so "export" is never parsed
+    as a workout id.
+    """
+    start = _parse_export_date(start_date, "start_date")
+    end = _parse_export_date(end_date, "end_date")
+
+    with get_session() as session:
+        query = session.query(Workout).order_by(Workout.started_at)
+        if start:
+            query = query.filter(Workout.started_at >= datetime(start.year, start.month, start.day))
+        if end:
+            end_exclusive = datetime(end.year, end.month, end.day) + timedelta(days=1)
+            query = query.filter(Workout.started_at < end_exclusive)
+        workouts = query.all()
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow([
+            "date", "workout_name", "exercise_name", "muscle_group",
+            "set_number", "weight_kg", "reps", "hold_seconds",
+            "to_failure", "rest_seconds", "note",
+        ])
+        for w in workouts:
+            exercises = session.query(Exercise).filter(
+                Exercise.workout_id == w.id
+            ).order_by(Exercise.order).all()
+            for e in exercises:
+                sets = session.query(ExerciseSet).filter(
+                    ExerciseSet.exercise_id == e.id
+                ).order_by(ExerciseSet.order).all()
+                for s in sets:
+                    writer.writerow([
+                        w.started_at.date().isoformat(),
+                        w.name or "",
+                        e.name,
+                        e.muscle_group or "",
+                        s.order + 1,
+                        s.weight_kg if s.weight_kg is not None else "",
+                        s.reps if s.reps is not None else "",
+                        s.hold_seconds if s.hold_seconds is not None else "",
+                        "yes" if s.to_failure else "no",
+                        s.rest_seconds if s.rest_seconds is not None else "",
+                        s.note or "",
+                    ])
+
+        filename = f"training-export-{date.today().isoformat()}.csv"
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+
+def _parse_export_date(value: Optional[str], field_name: str) -> Optional[date]:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be YYYY-MM-DD")
 
 
 @router.get("/workouts/{workout_id}", response_model=WorkoutDetailResponse)

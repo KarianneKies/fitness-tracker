@@ -59,6 +59,44 @@ def test_workout_404s(client):
     assert client.delete("/workouts/999999").status_code == 404
 
 
+def test_workout_export_csv(client):
+    wid = client.post("/workouts", json={"name": "Export Me"}).json()["id"]
+    client.patch(f"/workouts/{wid}", json={"exercises": [
+        {"name": "Squat (Barbell)", "order": 0, "sets": [
+            {"order": 0, "reps": 5, "weight_kg": 60.0, "to_failure": False},
+            {"order": 1, "reps": 3, "weight_kg": 65.0, "to_failure": True},
+        ]},
+    ]})
+
+    r = client.get("/workouts/export")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert 'attachment; filename="training-export-' in r.headers["content-disposition"]
+
+    lines = r.text.strip().splitlines()
+    header = lines[0].split(",")
+    assert header == [
+        "date", "workout_name", "exercise_name", "muscle_group", "set_number",
+        "weight_kg", "reps", "hold_seconds", "to_failure", "rest_seconds", "note",
+    ]
+    rows = [l for l in lines[1:] if "Export Me" in l]
+    assert len(rows) == 2
+    assert rows[0].split(",")[:7] == [
+        date.today().isoformat(), "Export Me", "Squat (Barbell)", "Legs", "1", "60.0", "5",
+    ]
+    assert rows[1].split(",")[8] == "yes"  # to_failure column for the second set
+
+    # date-range filtering excludes everything outside the window
+    far_past = client.get("/workouts/export", params={
+        "start_date": "2000-01-01", "end_date": "2000-01-02",
+    })
+    assert "Export Me" not in far_past.text
+
+    assert client.get("/workouts/export", params={"start_date": "nope"}).status_code == 400
+
+    client.delete(f"/workouts/{wid}")
+
+
 # ---------- meals ----------
 def _meal_payload(**over):
     base = {
